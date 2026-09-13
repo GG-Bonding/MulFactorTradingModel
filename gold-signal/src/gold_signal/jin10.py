@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -90,52 +91,14 @@ class Jin10Client:
         payload = self.call_tool("get_quote", {"code": code})
         return parse_quote(payload, code)
 
-    def get_kline(self, code: str, count: int = 30) -> list[Bar]:
-        attempts = [
-            self._kline_args(code, count),
-            {"code": code, "count": count},
-            {"code": code},
-        ]
-        seen: list[str] = []
-        last_error: Jin10Error | None = None
-        for args in attempts:
-            key = str(args)
-            if key in seen:
-                continue
-            seen.append(key)
-            try:
-                payload = self.call_tool("get_kline", args)
-                bars = parse_kline(payload)
-                if bars:
-                    return bars[-count:]
-                last_error = Jin10Error(f"get_kline({code}) returned no bars: {payload!r}")
-            except Jin10Error as exc:
-                last_error = exc
-        raise last_error or Jin10Error(f"get_kline({code}) failed")
-
-    def _kline_args(self, code: str, count: int) -> dict[str, Any]:
-        schema = self._tool_schema("get_kline")
-        props = (schema.get("properties") or {}) if schema else {}
-        args: dict[str, Any] = {"code": code}
-        if "count" in props:
-            args["count"] = count
-        elif "limit" in props:
-            args["limit"] = count
-        else:
-            args["count"] = count
-        if "period" in props:
-            args["period"] = _preferred_enum(props["period"], ["1m", "1", "1min", "min1"])
-        elif "interval" in props:
-            args["interval"] = _preferred_enum(props["interval"], ["1m", "1", "1min"])
-        elif "type" in props:
-            args["type"] = _preferred_enum(props["type"], ["1", "1m"])
-        return args
-
-    def _tool_schema(self, name: str) -> dict[str, Any]:
-        for tool in self.tools:
-            if tool.get("name") == name:
-                return tool.get("inputSchema") or tool.get("input_schema") or {}
-        return {}
+    def get_kline(self, code: str, count: int = 30, start_ts: int | None = None) -> list[Bar]:
+        if not self._connected:
+            self.connect()
+        if start_ts is None:
+            start_ts = int(time.time()) - max(count, 1) * 60
+        payload = self.call_tool("get_kline", {"code": code, "time": start_ts, "count": count})
+        bars = parse_kline(payload)
+        return bars[-count:] if bars else []
 
     def _next_id(self) -> int:
         self._request_id += 1
@@ -456,17 +419,3 @@ def _as_float(value: Any) -> float | None:
         except ValueError:
             return None
     return None
-
-
-def _preferred_enum(schema: dict[str, Any], preferred: list[str]) -> str:
-    enum = schema.get("enum")
-    if isinstance(enum, list) and enum:
-        as_str = [str(x) for x in enum]
-        for item in preferred:
-            if item in as_str:
-                return item
-        return as_str[0]
-    default = schema.get("default")
-    if default is not None:
-        return str(default)
-    return preferred[0]

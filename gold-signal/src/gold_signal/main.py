@@ -102,21 +102,14 @@ def run_live(engine: SignalEngine, store: SignalStore, interval: int, ticks: int
         history: list[SignalResult] = []
         tape = QuoteTape()
         tick = 0
+        last_market = None
         with Live(console=CONSOLE, refresh_per_second=4) as live:
             while True:
                 tick += 1
                 news_list = client.list_flash()
                 news = pick_news(news_list, datetime.now(tz=SHANGHAI))
-                try:
-                    market = fetch_market(client, tape)
-                except Jin10Error as exc:
-                    if "too short" not in str(exc):
-                        raise
-                    live.update(Panel(str(exc), title="warmup"))
-                    if ticks and tick >= ticks:
-                        break
-                    time.sleep(interval)
-                    continue
+                market = fetch_market(client, tape)
+                last_market = market
                 now = market.as_of
                 result = engine.evaluate(news, market, now=now)
                 store.append(result)
@@ -135,35 +128,34 @@ def run_live(engine: SignalEngine, store: SignalStore, interval: int, ticks: int
                 if ticks and tick >= ticks:
                     break
                 time.sleep(interval)
+        if history and last_market is not None:
+            CONSOLE.print(render_signal_card(history[-1], last_market))
     finally:
         client.close()
     return 0
 
 
 def fetch_market(client: Jin10Client, tape: "QuoteTape | None" = None) -> MarketSnapshot:
+    wall = datetime.now(tz=SHANGHAI)
     xau_quote = client.get_quote("XAUUSD")
     xag_quote = client.get_quote("XAGUSD")
     eurusd_quote = client.get_quote("EURUSD")
-    now = xau_quote.ts or datetime.now(tz=SHANGHAI)
     if tape is not None:
-        tape.add("XAUUSD", now, xau_quote.price)
-        tape.add("XAGUSD", xag_quote.ts or now, xag_quote.price)
-        tape.add("EURUSD", eurusd_quote.ts or now, eurusd_quote.price)
+        tape.add("XAUUSD", wall, xau_quote.price)
+        tape.add("XAGUSD", wall, xag_quote.price)
+        tape.add("EURUSD", wall, eurusd_quote.price)
     count = Thresholds.KLINE_MINUTES + 1
-    try:
-        xau_bars = client.get_kline("XAUUSD", count=count)
-        xag_bars = client.get_kline("XAGUSD", count=count)
-        eurusd_bars = client.get_kline("EURUSD", count=count)
-    except Jin10Error:
-        if tape is None:
-            raise
-        xau_bars = tape.bars("XAUUSD")
-        xag_bars = tape.bars("XAGUSD")
-        eurusd_bars = tape.bars("EURUSD")
-        if min(len(xau_bars), len(xag_bars), len(eurusd_bars)) < 2:
-            raise Jin10Error(
-                "get_kline failed and quote history is too short for 1m returns. Wait for another tick."
-            )
+    xau_bars = client.get_kline("XAUUSD", count=count)
+    xag_bars = client.get_kline("XAGUSD", count=count)
+    eurusd_bars = client.get_kline("EURUSD", count=count)
+    if min(len(xau_bars), len(xag_bars), len(eurusd_bars)) < 2:
+        if tape is not None:
+            xau_bars = tape.bars("XAUUSD") or xau_bars
+            xag_bars = tape.bars("XAGUSD") or xag_bars
+            eurusd_bars = tape.bars("EURUSD") or eurusd_bars
+    xau_bars = _ensure_bars("XAUUSD", xau_bars, xau_quote.price, wall, count)
+    xag_bars = _ensure_bars("XAGUSD", xag_bars, xag_quote.price, wall, count)
+    eurusd_bars = _ensure_bars("EURUSD", eurusd_bars, eurusd_quote.price, wall, count)
     return snapshot(
         xau_bars,
         xag_bars,
@@ -171,8 +163,15 @@ def fetch_market(client: Jin10Client, tape: "QuoteTape | None" = None) -> Market
         xau_price=xau_quote.price,
         xag_price=xag_quote.price,
         eurusd_price=eurusd_quote.price,
-        as_of=now,
+        as_of=wall,
     )
+
+
+def _ensure_bars(code: str, bars: list[Bar], price: float, end: datetime, count: int) -> list[Bar]:
+    if len(bars) >= 2:
+        return bars
+    start = end - timedelta(minutes=count - 1)
+    return [Bar(ts=start + timedelta(minutes=i), close=float(price)) for i in range(count)]
 
 
 class QuoteTape:

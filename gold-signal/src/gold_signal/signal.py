@@ -33,7 +33,9 @@ class SignalEngine:
         now: datetime | None = None,
     ) -> SignalResult:
         now = now or market.as_of
-        impact = classify_news(news.text) if news else NewsImpact(0, 0, 0.0, "无新闻")
+        impact = classify_news(news.text) if news else NewsImpact(
+            direction=0, importance=0, confidence=0.0, reason="无新闻"
+        )
         age = news_age_seconds(news, now) if news else 10_000
         weight = news_weight(age) if news else 0.0
         n_score = news_score(impact, age) if news else 0

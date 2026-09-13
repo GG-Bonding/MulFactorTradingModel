@@ -43,6 +43,12 @@ def test_war_is_bullish_gold():
     assert impact.importance == 3
 
 
+def test_hormuz_attack_is_bullish_gold():
+    impact = classify_news("英国海事贸易组织：地方当局正在撤离在霍尔木兹海峡遭袭的船员。")
+    assert impact.direction == 1
+    assert impact.importance >= 2
+
+
 def test_news_weight_decay():
     assert news_weight(60) == 1.0
     assert news_weight(180) == 0.7
