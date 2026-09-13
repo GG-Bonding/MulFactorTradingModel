@@ -49,6 +49,12 @@ def test_hormuz_attack_is_bullish_gold():
     assert impact.importance >= 2
 
 
+def test_bitcoin_pump_is_relevant_bullish():
+    impact = classify_news("比特币突破前高并持续上涨")
+    assert impact.direction == 1
+    assert impact.importance >= 2
+
+
 def test_news_weight_decay():
     assert news_weight(60) == 1.0
     assert news_weight(180) == 0.7

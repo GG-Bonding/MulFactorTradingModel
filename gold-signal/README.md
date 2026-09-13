@@ -62,6 +62,12 @@ export PYTHONPATH=src
 python -m gold_signal.main --mode live
 ```
 
+周日黄金休市时，可用 BTC 测同一套信号（行情来自 Binance 公开接口，新闻仍是金十）：
+
+```bash
+python -m gold_signal.main --mode live --book btc
+```
+
 可选：
 
 ```bash

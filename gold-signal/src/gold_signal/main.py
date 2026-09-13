@@ -16,7 +16,7 @@ from rich.table import Table
 from rich.text import Text
 
 from gold_signal.jin10 import SHANGHAI, Jin10Client, Jin10Error, parse_time
-from gold_signal.market import snapshot
+from gold_signal.market import fetch_binance_bars, fetch_binance_price, snapshot
 from gold_signal.models import Bar, FlashNews, MarketSnapshot, SignalResult, SignalSide, Thresholds
 from gold_signal.news import classify_news, news_age_seconds, news_weight
 from gold_signal.signal import SignalEngine, SignalStore
@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser(description="Gold Realtime Signal Engine V0")
     parser.add_argument("--mode", choices=("replay", "live"), required=True)
+    parser.add_argument("--book", choices=("gold", "btc"), default="gold")
     parser.add_argument("--interval", type=int, default=Thresholds.POLL_SECONDS)
     parser.add_argument("--ticks", type=int, default=0, help="live ticks then exit; 0 = run forever")
     parser.add_argument("--output", type=Path, default=DATA_PATH)
@@ -42,8 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.mode == "replay":
             return run_replay(engine, store)
-        return run_live(engine, store, interval=args.interval, ticks=args.ticks)
-    except Jin10Error as exc:
+        return run_live(engine, store, interval=args.interval, ticks=args.ticks, book=args.book)
+    except (Jin10Error, RuntimeError) as exc:
         CONSOLE.print(f"[red]{exc}[/red]")
         return 1
 
@@ -86,7 +87,13 @@ def run_replay(engine: SignalEngine, store: SignalStore) -> int:
     return 0
 
 
-def run_live(engine: SignalEngine, store: SignalStore, interval: int, ticks: int) -> int:
+def run_live(
+    engine: SignalEngine,
+    store: SignalStore,
+    interval: int,
+    ticks: int,
+    book: str = "gold",
+) -> int:
     token = os.getenv("JIN10_TOKEN") or os.getenv("JIN10_BEARER_TOKEN")
     if not token:
         raise Jin10Error(
@@ -96,7 +103,7 @@ def run_live(engine: SignalEngine, store: SignalStore, interval: int, ticks: int
     client = Jin10Client(token=token, url=url)
     try:
         init = client.connect()
-        CONSOLE.print(f"Jin10 connected. tools={client.tool_names()}")
+        CONSOLE.print(f"Jin10 connected. tools={client.tool_names()} book={book}")
         CONSOLE.print(f"initialize protocol={init.get('protocolVersion')}")
         pending: list[dict[str, Any]] = []
         history: list[SignalResult] = []
@@ -107,8 +114,13 @@ def run_live(engine: SignalEngine, store: SignalStore, interval: int, ticks: int
             while True:
                 tick += 1
                 news_list = client.list_flash()
+                if book == "btc":
+                    try:
+                        news_list = merge_news(news_list, client.search_flash("比特币"))
+                    except Jin10Error as exc:
+                        CONSOLE.print(f"[yellow]search_flash(比特币) failed: {exc}[/yellow]")
                 news = pick_news(news_list, datetime.now(tz=SHANGHAI))
-                market = fetch_market(client, tape)
+                market = fetch_market(client, tape, book=book)
                 last_market = market
                 now = market.as_of
                 result = engine.evaluate(news, market, now=now)
@@ -123,8 +135,8 @@ def run_live(engine: SignalEngine, store: SignalStore, interval: int, ticks: int
                         }
                     )
                 history.append(result)
-                update_pending_returns(client, store, pending, now)
-                live.update(render_dashboard(market, news, result, history[-10:], mode="live"))
+                update_pending_returns(store, pending, now, market.xau.price)
+                live.update(render_dashboard(market, news, result, history[-10:], mode=f"live/{book}"))
                 if ticks and tick >= ticks:
                     break
                 time.sleep(interval)
@@ -135,8 +147,34 @@ def run_live(engine: SignalEngine, store: SignalStore, interval: int, ticks: int
     return 0
 
 
-def fetch_market(client: Jin10Client, tape: "QuoteTape | None" = None) -> MarketSnapshot:
+def fetch_market(
+    client: Jin10Client,
+    tape: "QuoteTape | None" = None,
+    book: str = "gold",
+) -> MarketSnapshot:
     wall = datetime.now(tz=SHANGHAI)
+    count = Thresholds.KLINE_MINUTES + 1
+    if book == "btc":
+        btc_bars = fetch_binance_bars("BTCUSDT", count=count)
+        eth_bars = fetch_binance_bars("ETHUSDT", count=count)
+        btc_price = fetch_binance_price("BTCUSDT")
+        eth_price = fetch_binance_price("ETHUSDT")
+        eurusd_quote = client.get_quote("EURUSD")
+        eurusd_bars = client.get_kline("EURUSD", count=count)
+        eurusd_bars = _ensure_bars("EURUSD", eurusd_bars, eurusd_quote.price, wall, count)
+        return snapshot(
+            btc_bars,
+            eth_bars,
+            eurusd_bars,
+            xau_price=btc_price,
+            xag_price=eth_price,
+            eurusd_price=eurusd_quote.price,
+            as_of=wall,
+            primary_code="BTCUSDT",
+            confirm_code="ETHUSDT",
+            dollar_code="EURUSD",
+        )
+
     xau_quote = client.get_quote("XAUUSD")
     xag_quote = client.get_quote("XAGUSD")
     eurusd_quote = client.get_quote("EURUSD")
@@ -144,7 +182,6 @@ def fetch_market(client: Jin10Client, tape: "QuoteTape | None" = None) -> Market
         tape.add("XAUUSD", wall, xau_quote.price)
         tape.add("XAGUSD", wall, xag_quote.price)
         tape.add("EURUSD", wall, eurusd_quote.price)
-    count = Thresholds.KLINE_MINUTES + 1
     xau_bars = client.get_kline("XAUUSD", count=count)
     xag_bars = client.get_kline("XAGUSD", count=count)
     eurusd_bars = client.get_kline("EURUSD", count=count)
@@ -192,6 +229,17 @@ class QuoteTape:
         return [Bar(ts=ts, close=price) for ts, price in sorted(buckets.items())]
 
 
+def merge_news(left: list[FlashNews], right: list[FlashNews]) -> list[FlashNews]:
+    seen: set[str] = set()
+    out: list[FlashNews] = []
+    for item in left + right:
+        if item.event_id in seen:
+            continue
+        seen.add(item.event_id)
+        out.append(item)
+    return out
+
+
 def pick_news(items: list[FlashNews], now: datetime) -> FlashNews | None:
     ranked: list[tuple[int, float, FlashNews]] = []
     for item in items:
@@ -209,19 +257,18 @@ def pick_news(items: list[FlashNews], now: datetime) -> FlashNews | None:
 
 
 def update_pending_returns(
-    client: Jin10Client,
     store: SignalStore,
     pending: list[dict[str, Any]],
     now: datetime,
+    price: float,
 ) -> None:
     if not pending:
         return
-    quote = client.get_quote("XAUUSD")
     still: list[dict[str, Any]] = []
     for item in pending:
         entry = float(item["entry"])
         elapsed = (now - item["t0"]).total_seconds()
-        ret = quote.price / entry - 1 if entry else None
+        ret = price / entry - 1 if entry else None
         kwargs: dict[str, float] = {}
         if elapsed >= 60 and "done_1m" not in item:
             kwargs["return_1m"] = ret
@@ -295,7 +342,7 @@ def _future_return(entry: float, future_price: float | None) -> float | None:
 def render_signal_card(result: SignalResult, market: MarketSnapshot) -> Panel:
     b = result.breakdown
     body = Text()
-    body.append("XAUUSD SIGNAL\n", style="bold")
+    body.append(f"{market.xau.code} SIGNAL\n", style="bold")
     body.append(result.timestamp.strftime("%Y-%m-%d %H:%M:%S") + "\n\n")
     body.append(f"Signal:      {result.signal.value}\n", style=_signal_style(result.signal))
     body.append(f"Score:       {result.score:+d}\n")
@@ -304,11 +351,11 @@ def render_signal_card(result: SignalResult, market: MarketSnapshot) -> Panel:
     body.append((result.news or "(none)") + "\n\n")
     body.append(f"News Impact:\n{result.news_impact_label} {b.news:+d}\n\n")
     body.append("Market Reaction:\n")
-    body.append(f"XAUUSD 1m     {market.xau.return_1m:+.2%}   {b.gold_1m:+d}\n")
-    body.append(f"XAUUSD 3m     {market.xau.return_3m:+.2%}   {b.gold_3m:+d}\n\n")
+    body.append(f"{market.xau.code} 1m     {market.xau.return_1m:+.2%}   {b.gold_1m:+d}\n")
+    body.append(f"{market.xau.code} 3m     {market.xau.return_3m:+.2%}   {b.gold_3m:+d}\n\n")
     body.append("Confirmation:\n")
-    body.append(f"XAGUSD 1m     {market.xag.return_1m:+.2%}   {b.silver:+d}\n")
-    body.append(f"EURUSD 1m     {market.eurusd.return_1m:+.2%}   {b.eurusd:+d}\n\n")
+    body.append(f"{market.xag.code} 1m     {market.xag.return_1m:+.2%}   {b.silver:+d}\n")
+    body.append(f"{market.eurusd.code} 1m     {market.eurusd.return_1m:+.2%}   {b.eurusd:+d}\n\n")
     body.append("Reason:\n")
     body.append(result.reason + "\n")
     if result.return_1m is not None:
@@ -332,11 +379,11 @@ def render_dashboard(
     layout = Table.grid(expand=True)
     header = Text(f"Gold Signal Engine V0  [{mode}]", style="bold")
     prices = Table(show_header=False, box=None)
-    prices.add_row("XAUUSD", f"{market.xau.price:.2f}")
+    prices.add_row(market.xau.code, f"{market.xau.price:.2f}")
     prices.add_row("1m", f"{market.xau.return_1m:+.2%}")
     prices.add_row("3m", f"{market.xau.return_3m:+.2%}")
-    prices.add_row("XAGUSD", f"{market.xag.return_1m:+.2%}")
-    prices.add_row("EURUSD", f"{market.eurusd.return_1m:+.2%}")
+    prices.add_row(market.xag.code, f"{market.xag.return_1m:+.2%}")
+    prices.add_row(market.eurusd.code, f"{market.eurusd.return_1m:+.2%}")
 
     event = Text()
     if news:
@@ -345,14 +392,14 @@ def render_dashboard(
         event.append(f"Gold Impact: {result.news_impact_label}\n")
         event.append(f"Age: {int(age)} sec")
     else:
-        event.append("无有效黄金相关新闻")
+        event.append("无有效相关新闻")
 
     scores = Table(show_header=False, box=None)
     scores.add_row("News", f"{result.breakdown.news:+d}")
-    scores.add_row("Gold 1m", f"{result.breakdown.gold_1m:+d}")
-    scores.add_row("Gold 3m", f"{result.breakdown.gold_3m:+d}")
-    scores.add_row("Silver", f"{result.breakdown.silver:+d}")
-    scores.add_row("EURUSD", f"{result.breakdown.eurusd:+d}")
+    scores.add_row(f"{market.xau.code} 1m", f"{result.breakdown.gold_1m:+d}")
+    scores.add_row(f"{market.xau.code} 3m", f"{result.breakdown.gold_3m:+d}")
+    scores.add_row(market.xag.code, f"{result.breakdown.silver:+d}")
+    scores.add_row(market.eurusd.code, f"{result.breakdown.eurusd:+d}")
     scores.add_row("TOTAL", f"{result.breakdown.total:+d}")
 
     sig = Text(

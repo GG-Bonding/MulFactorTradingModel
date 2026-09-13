@@ -72,3 +72,17 @@ def test_parse_quote_and_kline_and_flash():
     )
     assert news[0].event_id == "abc"
     assert "非农" in news[0].text
+
+
+def test_parse_binance_klines():
+    from gold_signal.market import parse_binance_klines
+
+    rows = [
+        [1789290780000, "76800", "76850", "76750", "76827.53"],
+        [1789290840000, "76827.53", "76840", "76790", "76810.00"],
+    ]
+    bars = parse_binance_klines(rows, "BTCUSDT")
+    assert len(bars) == 2
+    assert bars[-1].close == 76810.0
+    rets = compute_returns(bars)
+    assert abs(rets["return_1m"] - (76810.0 / 76827.53 - 1)) < 1e-12

@@ -147,16 +147,24 @@ def build_reason(
     else:
         parts.append("新闻方向不确定")
 
-    parts.append("黄金上涨" if market.xau.return_1m > 0 else "黄金下跌" if market.xau.return_1m < 0 else "黄金持平")
-    parts.append("白银上涨" if market.xag.return_1m > 0 else "白银下跌" if market.xag.return_1m < 0 else "白银持平")
+    parts.append(_move_text(market.xau.code, market.xau.return_1m))
+    parts.append(_move_text(market.xag.code, market.xag.return_1m))
     if market.eurusd.return_1m > 0:
         parts.append("美元走弱确认")
     elif market.eurusd.return_1m < 0:
         parts.append("美元走强确认")
     else:
-        parts.append("EURUSD持平")
+        parts.append(f"{market.eurusd.code}持平")
     parts.append(f"最终 {signal.value}")
     return " + ".join(parts)
+
+
+def _move_text(code: str, ret: float) -> str:
+    if ret > 0:
+        return f"{code}上涨"
+    if ret < 0:
+        return f"{code}下跌"
+    return f"{code}持平"
 
 
 def compute_confidence(

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import statistics
-from datetime import datetime
+from datetime import datetime, timezone
+
+import httpx
 
 from gold_signal.models import AssetMove, Bar, MarketSnapshot, Thresholds
+
+BINANCE_VISION = "https://data-api.binance.vision"
 
 
 def compute_returns(bars: list[Bar], current_price: float | None = None) -> dict[str, float]:
@@ -85,14 +89,65 @@ def snapshot(
     xag_price: float | None = None,
     eurusd_price: float | None = None,
     as_of: datetime | None = None,
+    primary_code: str = "XAUUSD",
+    confirm_code: str = "XAGUSD",
+    dollar_code: str = "EURUSD",
 ) -> MarketSnapshot:
-    xau = asset_move("XAUUSD", xau_bars, xau_price)
+    xau = asset_move(primary_code, xau_bars, xau_price)
     return MarketSnapshot(
         xau=xau,
-        xag=asset_move("XAGUSD", xag_bars, xag_price),
-        eurusd=asset_move("EURUSD", eurusd_bars, eurusd_price),
+        xag=asset_move(confirm_code, xag_bars, xag_price),
+        eurusd=asset_move(dollar_code, eurusd_bars, eurusd_price),
         as_of=as_of or max(bar.ts for bar in xau_bars),
     )
+
+
+def parse_binance_klines(rows: list, code: str = "BTCUSDT") -> list[Bar]:
+    bars: list[Bar] = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 5:
+            raise ValueError(f"{code} kline row is invalid: {row!r}")
+        ts_ms = int(row[0])
+        ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        bars.append(
+            Bar(
+                ts=ts,
+                open=float(row[1]),
+                high=float(row[2]),
+                low=float(row[3]),
+                close=float(row[4]),
+            )
+        )
+    bars.sort(key=lambda b: b.ts)
+    return bars
+
+
+def fetch_binance_bars(symbol: str, count: int = 31) -> list[Bar]:
+    payload = _binance_get(
+        "/api/v3/klines",
+        {"symbol": symbol, "interval": "1m", "limit": count},
+    )
+    if not isinstance(payload, list) or not payload:
+        raise RuntimeError(f"Binance klines for {symbol} were empty: {payload!r}")
+    return parse_binance_klines(payload, symbol)
+
+
+def fetch_binance_price(symbol: str) -> float:
+    payload = _binance_get("/api/v3/ticker/price", {"symbol": symbol})
+    if not isinstance(payload, dict) or "price" not in payload:
+        raise RuntimeError(f"Binance ticker for {symbol} missing price: {payload!r}")
+    return float(payload["price"])
+
+
+def _binance_get(path: str, params: dict) -> object:
+    url = BINANCE_VISION + path
+    try:
+        response = httpx.get(url, params=params, timeout=20.0)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Binance request failed {url}: {exc}") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(f"Binance HTTP {response.status_code} {url}: {response.text[:400]}")
+    return response.json()
 
 
 def _return_vs(bars: list[Bar], current: float, minutes: int) -> float:
