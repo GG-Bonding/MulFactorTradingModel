@@ -115,10 +115,14 @@ def run_live(
                 tick += 1
                 news_list = client.list_flash()
                 if book == "btc":
+                    keywords = ("比特币",)
+                else:
+                    keywords = ("黄金", "美联储")
+                for keyword in keywords:
                     try:
-                        news_list = merge_news(news_list, client.search_flash("比特币"))
+                        news_list = merge_news(news_list, client.search_flash(keyword))
                     except Jin10Error as exc:
-                        CONSOLE.print(f"[yellow]search_flash(比特币) failed: {exc}[/yellow]")
+                        CONSOLE.print(f"[yellow]search_flash({keyword}) failed: {exc}[/yellow]")
                 news = pick_news(news_list, datetime.now(tz=SHANGHAI))
                 market = fetch_market(client, tape, book=book)
                 last_market = market

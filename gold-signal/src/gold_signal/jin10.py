@@ -95,7 +95,8 @@ class Jin10Client:
         if not self._connected:
             self.connect()
         if start_ts is None:
-            start_ts = int(time.time()) - max(count, 1) * 60
+            # Jin10 treats `time` as the window end and walks backward `count` minutes.
+            start_ts = int(time.time())
         payload = self.call_tool("get_kline", {"code": code, "time": start_ts, "count": count})
         bars = parse_kline(payload)
         return bars[-count:] if bars else []
