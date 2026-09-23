@@ -15,35 +15,54 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from gold_signal.europe import append_europe, classify_europe, fetch_europe_snapshot
+from gold_signal.tape import GROUP_LABELS, GROUP_ORDER, fetch_tape
 from gold_signal.jin10 import SHANGHAI, Jin10Client, Jin10Error, parse_time
 from gold_signal.market import fetch_binance_bars, fetch_binance_price, snapshot
-from gold_signal.models import Bar, FlashNews, MarketSnapshot, SignalResult, SignalSide, Thresholds
+from gold_signal.models import (
+    Bar,
+    EuropeVerdict,
+    FlashNews,
+    MarketSnapshot,
+    PricedQuote,
+    SignalResult,
+    SignalSide,
+    Thresholds,
+)
 from gold_signal.news import classify_news, news_age_seconds, news_weight
 from gold_signal.signal import SignalEngine, SignalStore
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = ROOT / "tests" / "fixtures"
 DATA_PATH = ROOT / "data" / "signals.jsonl"
+EUROPE_PATH = ROOT / "data" / "europe.jsonl"
 CONSOLE = Console()
 
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser(description="Gold Realtime Signal Engine V0")
-    parser.add_argument("--mode", choices=("replay", "live"), required=True)
+    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape"), required=True)
     parser.add_argument("--book", choices=("gold", "btc"), default="gold")
-    parser.add_argument("--interval", type=int, default=Thresholds.POLL_SECONDS)
-    parser.add_argument("--ticks", type=int, default=0, help="live ticks then exit; 0 = run forever")
+    parser.add_argument("--interval", type=int, default=None, help="seconds between ticks")
+    parser.add_argument("--ticks", type=int, default=0, help="ticks then exit; 0 = forever (live) or one shot (europe)")
     parser.add_argument("--output", type=Path, default=DATA_PATH)
     args = parser.parse_args(argv)
 
     store = SignalStore(args.output)
     engine = SignalEngine()
+    interval = args.interval
+    if interval is None:
+        interval = 60 if args.mode in ("europe", "tape") else Thresholds.POLL_SECONDS
 
     try:
         if args.mode == "replay":
             return run_replay(engine, store)
-        return run_live(engine, store, interval=args.interval, ticks=args.ticks, book=args.book)
+        if args.mode == "europe":
+            return run_europe(interval=interval, ticks=args.ticks or 1)
+        if args.mode == "tape":
+            return run_tape(interval=interval, ticks=args.ticks or 1)
+        return run_live(engine, store, interval=interval, ticks=args.ticks, book=args.book)
     except (Jin10Error, RuntimeError) as exc:
         CONSOLE.print(f"[red]{exc}[/red]")
         return 1
@@ -110,6 +129,8 @@ def run_live(
         tape = QuoteTape()
         tick = 0
         last_market = None
+        europe_verdict: EuropeVerdict | None = None
+        last_europe_ts = 0.0
         with Live(console=CONSOLE, refresh_per_second=4) as live:
             while True:
                 tick += 1
@@ -117,7 +138,7 @@ def run_live(
                 if book == "btc":
                     keywords = ("比特币",)
                 else:
-                    keywords = ("黄金", "美联储")
+                    keywords = ("黄金", "美联储", "国债", "美债")
                 for keyword in keywords:
                     try:
                         news_list = merge_news(news_list, client.search_flash(keyword))
@@ -140,7 +161,23 @@ def run_live(
                     )
                 history.append(result)
                 update_pending_returns(store, pending, now, market.xau.price)
-                live.update(render_dashboard(market, news, result, history[-10:], mode=f"live/{book}"))
+                if book == "gold" and time.time() - last_europe_ts >= 60:
+                    try:
+                        europe_verdict = classify_europe(fetch_europe_snapshot(client))
+                        append_europe(EUROPE_PATH, europe_verdict)
+                    except (Jin10Error, RuntimeError) as exc:
+                        CONSOLE.print(f"[yellow]europe fetch failed: {exc}[/yellow]")
+                    last_europe_ts = time.time()
+                live.update(
+                    render_dashboard(
+                        market,
+                        news,
+                        result,
+                        history[-10:],
+                        mode=f"live/{book}",
+                        europe=europe_verdict,
+                    )
+                )
                 if ticks and tick >= ticks:
                     break
                 time.sleep(interval)
@@ -148,6 +185,69 @@ def run_live(
             CONSOLE.print(render_signal_card(history[-1], last_market))
     finally:
         client.close()
+    return 0
+
+
+def run_europe(interval: int, ticks: int) -> int:
+    token = os.getenv("JIN10_TOKEN") or os.getenv("JIN10_BEARER_TOKEN")
+    url = os.getenv("JIN10_MCP_URL") or os.getenv("JIN10_MCP_SERVER_URL") or "https://mcp.jin10.com/mcp"
+    client: Jin10Client | None = None
+    try:
+        if token:
+            try:
+                client = Jin10Client(token=token, url=url)
+                client.connect()
+                CONSOLE.print(f"Jin10 connected for FX. tools={client.tool_names()}")
+            except Jin10Error as exc:
+                CONSOLE.print(f"[yellow]Jin10 unavailable ({exc}); FX from Yahoo[/yellow]")
+                client = None
+        else:
+            CONSOLE.print("[yellow]No JIN10_TOKEN — EURUSD/GBPUSD fall back to Yahoo[/yellow]")
+        tick = 0
+        last = None
+        while True:
+            tick += 1
+            snap = fetch_europe_snapshot(client)
+            verdict = classify_europe(snap)
+            append_europe(EUROPE_PATH, verdict)
+            last = verdict
+            CONSOLE.print(render_europe_panel(verdict))
+            if ticks and tick >= ticks:
+                break
+            time.sleep(interval)
+        if last is not None:
+            CONSOLE.print(f"europe verdict written to {EUROPE_PATH}")
+    finally:
+        if client is not None:
+            client.close()
+    return 0
+
+
+def run_tape(interval: int, ticks: int) -> int:
+    token = os.getenv("JIN10_TOKEN") or os.getenv("JIN10_BEARER_TOKEN")
+    url = os.getenv("JIN10_MCP_URL") or os.getenv("JIN10_MCP_SERVER_URL") or "https://mcp.jin10.com/mcp"
+    client: Jin10Client | None = None
+    try:
+        if token:
+            try:
+                client = Jin10Client(token=token, url=url)
+                client.connect()
+                CONSOLE.print(f"Jin10 connected for oil/FX. tools={client.tool_names()}")
+            except Jin10Error as exc:
+                CONSOLE.print(f"[yellow]Jin10 unavailable ({exc}); oil and FX will be missing[/yellow]")
+                client = None
+        else:
+            CONSOLE.print("[yellow]No JIN10_TOKEN — oil and FX will be missing[/yellow]")
+        tick = 0
+        while True:
+            tick += 1
+            CONSOLE.print(render_tape(fetch_tape(client)))
+            if ticks and tick >= ticks:
+                break
+            time.sleep(interval)
+    finally:
+        if client is not None:
+            client.close()
     return 0
 
 
@@ -373,12 +473,115 @@ def render_signal_card(result: SignalResult, market: MarketSnapshot) -> Panel:
     return Panel(body, title="==========", subtitle="==========")
 
 
+def render_tape(rows: list[PricedQuote]) -> Panel:
+    body = Text()
+    body.append("Prices only. These do not create a gold BUY/SELL.\n\n", style="bold")
+    by_group: dict[str, list[PricedQuote]] = {group: [] for group in GROUP_ORDER}
+    for row in rows:
+        by_group.setdefault(row.group, []).append(row)
+    for group in GROUP_ORDER:
+        body.append(GROUP_LABELS.get(group, group) + "\n", style="bold")
+        for row in by_group.get(group, []):
+            if row.price is None:
+                body.append(f"  {row.name:<8} {row.code:<8} MISSING  {row.missing or ''}\n")
+                continue
+            ts = row.ts.strftime("%H:%M:%S") if row.ts else "no-ts"
+            body.append(
+                f"  {row.name:<8} {row.code:<8} {row.price:.4f}  1d {_fmt_signed(row.change_1d)}  {ts}  [{row.source}]\n"
+            )
+        body.append("\n")
+    return Panel(body, title="Priced tape", subtitle="missing stays missing")
+
+
+def render_europe_panel(verdict: EuropeVerdict) -> Panel:
+    snap = verdict.snapshot
+    body = Text()
+    body.append(f"{snap.as_of.strftime('%Y-%m-%d %H:%M:%S %Z')}\n", style="bold")
+    body.append(f"Stage:  {verdict.stage}\n", style=_europe_stage_style(verdict.stage))
+    body.append(f"Driver: {verdict.driver}\n\n")
+
+    body.append("Yields (source on each line)\n", style="bold")
+    body.append(_yield_line("OAT 10Y", snap.oat) + "\n")
+    body.append(_yield_line("Bund 10Y", snap.bund) + "\n")
+    body.append(_yield_line("Italy 10Y", snap.italy) + "\n")
+    body.append(_yield_line("Gilt 10Y", snap.gilt) + "\n")
+    body.append(
+        f"OAT-Bund   {_fmt_bp(snap.oat_bund_bp)}   Italy-Bund {_fmt_bp(snap.italy_bund_bp)}\n\n"
+    )
+
+    body.append("FX / banks\n", style="bold")
+    body.append(
+        f"EURUSD { _fmt_px(snap.eurusd) }  1d {_fmt_signed(snap.eurusd_1d)}\n"
+        f"GBPUSD { _fmt_px(snap.gbpusd) }  1d {_fmt_signed(snap.gbpusd_1d)}\n"
+        f"EURGBP { _fmt_px(snap.eurgbp) }  1d {_fmt_signed(snap.eurgbp_1d)}\n"
+        f"CAC40  1d {_fmt_signed(snap.cac40_1d)}   "
+        f"FR banks 1d {_fmt_signed(snap.french_banks_1d)}   "
+        f"banks vs CAC {_fmt_signed(snap.banks_vs_cac_1d)}\n\n"
+    )
+
+    body.append("Separate transmission — not one gold SELL\n", style="bold")
+    body.append(f"EUR              {verdict.eur}\n")
+    body.append(f"GBP vs EUR       {verdict.gbp_vs_eur}\n")
+    body.append(f"GBP vs USD       {verdict.gbp_vs_usd}\n")
+    body.append(f"French domestic  {verdict.french_domestic}\n")
+    body.append(f"French banks     {verdict.french_banks}\n")
+    body.append(f"French exporters {verdict.french_exporters}\n")
+    body.append(f"Gold bias        {verdict.gold}\n")
+    body.append("Gold BUY/SELL still waits for XAUUSD confirmation.\n\n")
+
+    body.append("Evidence\n", style="bold")
+    if verdict.evidence:
+        for item in verdict.evidence:
+            body.append(f"  • {item}\n")
+    else:
+        body.append("  (none)\n")
+    body.append("\nNot proven / missing\n", style="bold")
+    holes = list(verdict.not_proven) + [f"missing: {m}" for m in snap.missing]
+    if holes:
+        for item in holes:
+            body.append(f"  • {item}\n")
+    else:
+        body.append("  (none)\n")
+    return Panel(body, title="Europe credit / fragmentation", subtitle="numbers without a source are not used")
+
+
+def _yield_line(label: str, point) -> str:
+    if point is None:
+        return f"{label:<10} MISSING"
+    ts = point.ts.strftime("%H:%M:%S") if point.ts else "no-ts"
+    chg = f"{point.change_bp:+.1f}bp" if point.change_bp is not None else "chg n/a"
+    return f"{label:<10} {point.yield_pct:.3f}%  {chg}  {ts}  [{point.source}]"
+
+
+def _fmt_bp(value: float | None) -> str:
+    return "MISSING" if value is None else f"{value:.1f}bp"
+
+
+def _fmt_px(value: float | None) -> str:
+    return "MISSING" if value is None else f"{value:.5f}"
+
+
+def _fmt_signed(value: float | None) -> str:
+    return "MISSING" if value is None else f"{value:+.2%}"
+
+
+def _europe_stage_style(stage: str) -> str:
+    if stage in ("EZ_FRAGMENTATION", "FRANCE_STRESS"):
+        return "bold red"
+    if stage == "FRANCE_REPRICING":
+        return "bold yellow"
+    if stage == "INSUFFICIENT":
+        return "bold magenta"
+    return "bold green"
+
+
 def render_dashboard(
     market: MarketSnapshot,
     news: FlashNews | None,
     result: SignalResult,
     history: list[SignalResult],
     mode: str,
+    europe: EuropeVerdict | None = None,
 ) -> Table:
     layout = Table.grid(expand=True)
     header = Text(f"Gold Signal Engine V0  [{mode}]", style="bold")
@@ -430,6 +633,17 @@ def render_dashboard(
     layout.add_row(Panel(event, title="Latest Event"))
     layout.add_row(Panel(scores, title="Score"))
     layout.add_row(Panel(sig, title="SIGNAL"))
+    if europe is not None:
+        compact = Text()
+        compact.append(f"{europe.stage} / {europe.driver}\n", style=_europe_stage_style(europe.stage))
+        compact.append(
+            f"OAT-Bund {_fmt_bp(europe.snapshot.oat_bund_bp)}  "
+            f"Italy-Bund {_fmt_bp(europe.snapshot.italy_bund_bp)}  "
+            f"EUR {europe.eur}  banks {europe.french_banks}  gold {europe.gold}\n"
+        )
+        if europe.not_proven:
+            compact.append("Not proven: " + europe.not_proven[0])
+        layout.add_row(Panel(compact, title="Europe (not a gold BUY/SELL)"))
     layout.add_row(recent)
     return layout
 

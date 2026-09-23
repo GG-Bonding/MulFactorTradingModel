@@ -55,6 +55,25 @@ def test_bitcoin_pump_is_relevant_bullish():
     assert impact.importance >= 2
 
 
+def test_french_yield_up_is_bearish_gold():
+    impact = classify_news("法国国债收益率上涨")
+    assert impact.direction == -1
+    assert impact.importance >= 2
+    assert news_score(impact, 30) == -2
+
+
+def test_us_yield_down_is_bullish_gold():
+    impact = classify_news("美国10年期国债收益率回落")
+    assert impact.direction == 1
+    assert impact.importance >= 2
+    assert news_score(impact, 30) == 2
+
+
+def test_real_rate_up_is_bearish_gold():
+    impact = classify_news("美国TIPS实际利率上升")
+    assert impact.direction == -1
+
+
 def test_news_weight_decay():
     assert news_weight(60) == 1.0
     assert news_weight(180) == 0.7

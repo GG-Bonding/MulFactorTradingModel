@@ -80,7 +80,42 @@ Live 会调用金十官方 MCP：`list_flash`、`get_quote`、`get_kline`。工�
 
 判断顺序：新闻 → 黄金有没有反应 → 白银/EURUSD 确认 → 信号。
 
-| 项 | 分数 |
+各国国债收益率按持有成本处理：收益率/实际利率上升偏空黄金，回落偏多黄金。仍要等金价确认，新闻本身不会直接 BUY/SELL。
+
+法国 OAT / Bund / 意大利国债 **不是** 同一条黄金空头。系统用 `--mode europe` 分开看：Bund = 政策利率，OAT–Bund = 法国信用，Italy–Bund = 欧元区碎片化。缺数据就标 missing，不编数字，也不会单独把黄金打成 SELL。
+
+```bash
+python -m gold_signal.main --mode europe --ticks 1
+```
+
+阶段（阈值在 `Thresholds`）：
+
+- `INSUFFICIENT`：OAT 或 Bund 拿不到
+- `POLICY_HAWKISH`：Bund 上行且利差仍窄
+- `FRANCE_REPRICING`：OAT–Bund ≥ 80bp
+- `FRANCE_STRESS`：OAT–Bund ≥ 100bp 且法国银行弱于 CAC
+- `EZ_FRAGMENTATION`：OAT–Bund ≥ 150bp **并且** Italy–Bund ≥ 250bp、银行承压、EUR/GBP 下跌
+
+数据源：CNBC 国债报价、Yahoo 法国银行/EURGBP/CAC、金十 EURUSD/GBPUSD（有 token 时）。快照写入 `data/europe.jsonl`。
+
+## 纳指 / 石油 / 外汇 / 美股报价
+
+只报价，不进黄金 BUY/SELL。
+
+```bash
+python -m gold_signal.main --mode tape --ticks 1
+```
+
+| 组 | 产品 | 来源 |
+| --- | --- | --- |
+| 纳指 | 纳指100期货 `NQ=F` | Yahoo。金十 `quote://codes` 里没有纳指 |
+| 石油 | WTI `USOIL`、布伦特 `UKOIL` | 金十 |
+| 外汇 | EURUSD、GBPUSD、USDJPY、AUDUSD、USDCNH、USDCHF、NZDUSD、USDCAD | 金十 |
+| 美股 | NVDA、AAPL、MSFT、AMZN、GOOGL、META、TSLA | Yahoo。这是固定流动性篮子，不是当日热度排名 |
+
+金十快讯不是推送流。Live 每 8 秒拉一次 `list_flash`（可带 `cursor` 翻更早的页）。MCP 响应里的 SSE 只是这一次 HTTP 调用的返回格式。
+
+## 当前规则
 | --- | --- |
 | 强利多 / 强利空新闻 | +2 / -2 |
 | XAUUSD 1m 明显涨/跌 | +2 / -2 |
@@ -108,6 +143,8 @@ Live 会调用金十官方 MCP：`list_flash`、`get_quote`、`get_kline`。工�
 - Live 依赖金十 MCP 对 XAUUSD / XAGUSD / EURUSD 的行情权限
 - 若 `get_kline` 不可用，会用报价缓存凑 1 分钟收益，启动后第一分钟可能没有信号
 - 今天下午若没有重大新闻，Live 会长时间 `HOLD`，这是正确行为
+- 欧洲信用模块没有官方逐日 OAT/Bund API；CNBC/Yahoo 失败时只报 missing，不回退到过时的 FRED 月度数据
+- CAC40 不代表法国内需股；银行相对 CAC 才是主权-银行循环的温度计
 
 ## 下一步
 

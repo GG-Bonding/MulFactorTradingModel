@@ -44,10 +44,25 @@ RELEVANT_KEYWORDS = (
     "加息",
     "鹰派",
     "鸽派",
+    "国债",
+    "美债",
+    "欧债",
+    "德债",
+    "日债",
+    "英债",
+    "法债",
+    "Bund",
+    "OAT",
+    "Gilt",
+    "Treasury",
+    "TIPS",
+    "实际利率",
 )
 
 HIGHER_IS_HAWKISH = ("CPI", "PCE", "非农", "GDP", "零售销售", "利率")
 HIGHER_IS_DOVISH = ("失业率", "初请")
+
+_BOND_CONTEXT = r"(国债|美债|欧债|德债|日债|英债|法债|Bund|OAT|Gilt|Treasury|TIPS|实际利率)"
 
 BULLISH_PATTERNS = (
     r"非农.{0,12}(不及|低于|未及|逊于|不及预期|不及预估)",
@@ -61,6 +76,7 @@ BULLISH_PATTERNS = (
     r"(银行危机|金融危机|违约潮)",
     r"比特币.{0,12}(上涨|突破|暴涨|新高)",
     r"(现货ETF).{0,8}(批准|通过|获批)",
+    rf"{_BOND_CONTEXT}.{{0,20}}(收益率|yield)?.{{0,12}}(下跌|回落|走低|下行|下滑)",
 )
 
 BEARISH_PATTERNS = (
@@ -73,6 +89,7 @@ BEARISH_PATTERNS = (
     r"美元.{0,8}(上涨|走强|大涨|暴涨|升值)",
     r"比特币.{0,12}(暴跌|大跌|闪崩)",
     r"(SEC|监管).{0,12}(打击|起诉|禁止|严打)",
+    rf"{_BOND_CONTEXT}.{{0,20}}(收益率|yield)?.{{0,12}}(上涨|上升|走高|飙升|上行|攀升)",
 )
 
 
@@ -123,8 +140,8 @@ def is_gold_relevant(text: str) -> bool:
 
 
 def importance_of(text: str) -> int:
-    high = ("非农", "CPI", "PCE", "利率决议", "FOMC", "战争", "军事冲突", "金融危机", "霍尔木兹", "袭击")
-    mid = ("失业率", "初请", "GDP", "零售销售", "Powell", "鲍威尔", "美联储", "美元", "比特币", "BTC", "加密")
+    high = ("非农", "CPI", "PCE", "利率决议", "FOMC", "战争", "军事冲突", "金融危机", "霍尔木兹", "袭击", "美债", "美国国债", "实际利率")
+    mid = ("失业率", "初请", "GDP", "零售销售", "Powell", "鲍威尔", "美联储", "美元", "比特币", "BTC", "加密", "国债", "欧债", "收益率")
     if any(k.lower() in text.lower() for k in high):
         return 3
     if any(k.lower() in text.lower() for k in mid):

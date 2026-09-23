@@ -19,6 +19,16 @@ class Thresholds:
     KLINE_MINUTES = 30
     POLL_SECONDS = 8
     MAX_SCORE = 7
+    # Europe credit/fragmentation — levels in basis points unless noted.
+    OAT_BUND_YELLOW_BP = 80.0
+    OAT_BUND_ORANGE_BP = 100.0
+    OAT_BUND_RED_BP = 150.0
+    ITALY_BUND_ORANGE_BP = 150.0
+    ITALY_BUND_RED_BP = 250.0
+    BANKS_LAGGING_1D = -0.003
+    BANKS_STRESS_1D = -0.008
+    EURGBP_STRESS_1D = -0.002
+    POLICY_BUND_MOVE_BP = 5.0
 
 
 class SignalSide(str, Enum):
@@ -125,3 +135,61 @@ class SignalResult(BaseModel):
     return_15m: float | None = None
     return_30m: float | None = None
     entry: float | None = None
+
+
+class YieldPoint(BaseModel):
+    code: str
+    name: str
+    yield_pct: float
+    change_bp: float | None = None
+    ts: datetime | None = None
+    source: str
+
+
+class EuropeSnapshot(BaseModel):
+    as_of: datetime
+    oat: YieldPoint | None = None
+    bund: YieldPoint | None = None
+    italy: YieldPoint | None = None
+    gilt: YieldPoint | None = None
+    oat_bund_bp: float | None = None
+    italy_bund_bp: float | None = None
+    eurusd: float | None = None
+    gbpusd: float | None = None
+    eurgbp: float | None = None
+    eurusd_1d: float | None = None
+    gbpusd_1d: float | None = None
+    eurgbp_1d: float | None = None
+    cac40: float | None = None
+    cac40_1d: float | None = None
+    french_banks_1d: float | None = None
+    banks_vs_cac_1d: float | None = None
+    bank_names: list[str] = Field(default_factory=list)
+    sources: dict[str, str] = Field(default_factory=dict)
+    missing: list[str] = Field(default_factory=list)
+
+
+class PricedQuote(BaseModel):
+    code: str
+    name: str
+    group: str
+    price: float | None = None
+    change_1d: float | None = None
+    ts: datetime | None = None
+    source: str
+    missing: str | None = None
+
+
+class EuropeVerdict(BaseModel):
+    stage: str
+    driver: str
+    eur: str
+    gbp_vs_eur: str
+    gbp_vs_usd: str
+    french_domestic: str
+    french_banks: str
+    french_exporters: str
+    gold: str
+    evidence: list[str] = Field(default_factory=list)
+    not_proven: list[str] = Field(default_factory=list)
+    snapshot: EuropeSnapshot
