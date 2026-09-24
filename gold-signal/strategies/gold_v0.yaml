@@ -1,0 +1,17 @@
+id: gold_v0
+name: Gold follows its own news only after the post-news price confirms
+asset: XAUUSD
+family: metal
+entry: FOLLOW_NEWS
+horizons:
+  - 1m
+  - 3m
+  - 5m
+confirmations:
+  - factor: XAUUSD.reaction_1m
+    operator: same_sign_abs_gte
+    value: 0.0008
+  - factor: XAGUSD.reaction_1m
+    operator: same_sign
+  - factor: EURUSD.reaction_1m
+    operator: same_sign

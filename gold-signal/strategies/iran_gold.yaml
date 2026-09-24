@@ -1,0 +1,26 @@
+id: iran_gold_001
+name: Oil and silver confirm a geopolitical gold long, real yield must not rise
+asset: XAUUSD
+family: metal
+entry: FOLLOW_NEWS
+horizons:
+  - 1m
+  - 3m
+  - 5m
+  - 15m
+notes:
+  - Historical news timestamps are not stored
+  - DFII10 cannot be used before its observation date
+confirmations:
+  - factor: XAUUSD.reaction_1m
+    operator: same_sign_abs_gte
+    value: 0.0008
+  - factor: USOIL.reaction_1m
+    operator: ">"
+    value: 0.0015
+  - factor: XAGUSD.reaction_1m
+    operator: ">"
+    value: 0.0008
+  - factor: DFII10.change
+    operator: "<="
+    value: 0

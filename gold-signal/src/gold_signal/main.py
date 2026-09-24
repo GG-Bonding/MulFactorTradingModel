@@ -17,6 +17,7 @@ from rich.text import Text
 
 from gold_signal.europe import append_europe, classify_europe, fetch_europe_snapshot
 from gold_signal.fred import as_record, fetch_us_real_yield_10y
+from gold_signal.hypothesis import evaluate_hypothesis, historical_validation, load_hypothesis
 from gold_signal.outcomes import load_events, win_rate_table
 from gold_signal.tape import GROUP_LABELS, GROUP_ORDER, fetch_tape
 from gold_signal.jin10 import SHANGHAI, Jin10Client, Jin10Error, parse_time
@@ -48,7 +49,10 @@ CONSOLE = Console()
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser(description="Gold Realtime Signal Engine V0")
-    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape", "polymarket", "stats", "yield"), required=True)
+    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape", "polymarket", "stats", "yield", "hypothesis", "backtest"), required=True)
+    parser.add_argument("--strategy", type=Path, default=None)
+    parser.add_argument("--start", default=None)
+    parser.add_argument("--end", default=None)
     parser.add_argument("--book", choices=("gold", "btc", "all"), default="gold")
     parser.add_argument("--interval", type=int, default=None, help="seconds between ticks")
     parser.add_argument("--ticks", type=int, default=0, help="ticks then exit; 0 = forever (live) or one shot (europe)")
@@ -74,6 +78,14 @@ def main(argv: list[str] | None = None) -> int:
             return run_stats()
         if args.mode == "yield":
             return run_yield()
+        if args.mode == "hypothesis":
+            if args.strategy is None:
+                raise RuntimeError("--strategy is required")
+            return run_hypothesis(args.strategy)
+        if args.mode == "backtest":
+            if args.strategy is None or not args.start or not args.end:
+                raise RuntimeError("--strategy, --start, and --end are required")
+            return run_backtest(args.strategy, args.start, args.end)
         return run_live(engine, store, interval=interval, ticks=args.ticks, book=args.book)
     except (Jin10Error, RuntimeError) as exc:
         CONSOLE.print(f"[red]{exc}[/red]")
@@ -306,10 +318,32 @@ def run_stats() -> int:
     table.add_column("waiting")
     table.add_column("wins")
     table.add_column("win rate")
+    table.add_column("avg return")
     for row in win_rate_table(rows):
         rate = "INSUFFICIENT" if row["win_rate"] is None else f"{row['win_rate']:.1%}"
-        table.add_row(row["horizon"], row["status"], str(row["samples"]), str(row["waiting"]), str(row["wins"]), rate)
+        average = "INSUFFICIENT" if row["avg_return"] is None else f"{row['avg_return']:+.2%}"
+        table.add_row(row["horizon"], row["status"], str(row["samples"]), str(row["waiting"]), str(row["wins"]), rate, average)
     CONSOLE.print(table)
+    return 0
+
+
+def run_hypothesis(strategy: Path) -> int:
+    spec = load_hypothesis(strategy)
+    CONSOLE.print(f"{spec.id} {spec.asset} entry={spec.entry}")
+    for case in load_replay_cases():
+        market = snapshot(case["xau"], case["xag"], case["eurusd"], as_of=case["now"])
+        decision = evaluate_hypothesis(spec, case["news"], market, case["now"])
+        CONSOLE.print(f"{case['name']} expected={case['expected']} side={decision.side} {' '.join(decision.reasons)}")
+    return 0
+
+
+def run_backtest(strategy: Path, start: str, end: str) -> int:
+    spec = load_hypothesis(strategy)
+    report = historical_validation(spec, start, end)
+    CONSOLE.print(f"{report['hypothesis']} {report['start']} → {report['end']}")
+    CONSOLE.print(f"status={report['status']} samples={report['samples']}")
+    for item in report["missing"]:
+        CONSOLE.print(f"missing: {item}")
     return 0
 
 

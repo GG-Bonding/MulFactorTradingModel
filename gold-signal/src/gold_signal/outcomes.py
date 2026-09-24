@@ -20,7 +20,7 @@ def win_rate(rows: list[dict], horizon: str = "reaction_5m") -> dict:
     """Win means a BUY rose or a SELL fell after the news. Waiting rows are not a 0% rate."""
     if horizon not in HORIZONS:
         raise ValueError(f"unknown horizon {horizon}")
-    ready = []
+    ready: list[tuple[bool, float]] = []
     waiting = 0
     for row in rows:
         signal = row.get("signal")
@@ -30,8 +30,9 @@ def win_rate(rows: list[dict], horizon: str = "reaction_5m") -> dict:
         if value is None:
             waiting += 1
             continue
-        won = (signal == "BUY" and value > 0) or (signal == "SELL" and value < 0)
-        ready.append(won)
+        signed = value if signal == "BUY" else -value
+        won = signed > 0
+        ready.append((won, signed))
     if not ready:
         return {
             "horizon": horizon,
@@ -40,8 +41,10 @@ def win_rate(rows: list[dict], horizon: str = "reaction_5m") -> dict:
             "waiting": waiting,
             "wins": 0,
             "win_rate": None,
+            "avg_return": None,
         }
-    wins = sum(1 for item in ready if item)
+    wins = sum(1 for won, _signed in ready if won)
+    average = sum(signed for _won, signed in ready) / len(ready)
     return {
         "horizon": horizon,
         "status": "OK",
@@ -49,6 +52,7 @@ def win_rate(rows: list[dict], horizon: str = "reaction_5m") -> dict:
         "waiting": waiting,
         "wins": wins,
         "win_rate": wins / len(ready),
+        "avg_return": average,
     }
 
 
