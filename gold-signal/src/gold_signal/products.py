@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -9,17 +8,10 @@ import httpx
 from gold_signal.jin10 import Jin10Client, Jin10Error
 from gold_signal.market import fetch_binance_bars, fetch_binance_price, snapshot
 from gold_signal.models import Bar, FlashNews, MarketSnapshot, NewsImpact, Thresholds
-from gold_signal.news import classify_btc_news, classify_gold_news, news_age_seconds, news_weight
+from gold_signal.news import news_age_seconds, news_weight
+from gold_signal.transmission import apply_transmission
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-
-_WAR = re.compile(r"(战争|开战|空袭|导弹|军事冲突|冲突升级|地缘政治|袭击|遭袭|霍尔木兹)")
-_US_MACRO = ("非农", "CPI", "PCE", "美联储", "FOMC", "Powell", "鲍威尔", "美债", "美国国债", "实际利率", "TIPS", "降息", "加息", "鹰派", "鸽派")
-_FRANCE_YIELD_UP = re.compile(r"(法国国债|OAT|欧债).{0,16}(收益率)?.{0,8}(上涨|上升|走高|飙升|上行)")
-_FRANCE_YIELD_DOWN = re.compile(r"(法国国债|OAT|欧债).{0,16}(收益率)?.{0,8}(下跌|回落|走低|下行)")
-_OIL_UP = re.compile(r"(原油|WTI|布伦特|石油|OPEC).{0,16}(上涨|减产|紧缺|中断|飙升|供应紧张)")
-_OIL_DOWN = re.compile(r"(原油|WTI|布伦特|石油|OPEC).{0,16}(下跌|增产|过剩|需求疲软|累库|供应增加)")
-
 
 @dataclass(frozen=True)
 class ProductSpec:
@@ -47,20 +39,7 @@ SIGNAL_PRODUCTS: tuple[ProductSpec, ...] = (
 
 
 def impact_for_product(text: str, family: str) -> NewsImpact:
-    raw = (text or "").strip()
-    if family == "metal":
-        return classify_gold_news(raw)
-    if family == "oil":
-        return _oil_impact(raw)
-    if family == "eur":
-        return _eur_impact(raw)
-    if family == "dollar":
-        return _dollar_impact(raw)
-    if family == "nasdaq":
-        return _nasdaq_impact(raw)
-    if family == "crypto":
-        return _crypto_impact(raw)
-    return _none(f"未知产品族 {family}")
+    return apply_transmission(text, family)
 
 
 def pick_product_news(items: list[FlashNews], now: datetime, family: str) -> FlashNews | None:
@@ -194,67 +173,3 @@ def parse_yahoo_minutes(payload: dict, code: str) -> list[Bar]:
 def _flat_bars(price: float, end: datetime, count: int = 31) -> list[Bar]:
     start = end - timedelta(minutes=count - 1)
     return [Bar(ts=start + timedelta(minutes=i), close=float(price)) for i in range(count)]
-
-
-def _oil_impact(text: str) -> NewsImpact:
-    if not text:
-        return _none("empty")
-    if _OIL_DOWN.search(text):
-        return _hit(-1, "原油供应增加或需求走弱")
-    if _OIL_UP.search(text) or _WAR.search(text):
-        return _hit(1, "原油供应收紧或地缘冲击供给")
-    return _none("这条新闻没有原油方向")
-
-
-def _eur_impact(text: str) -> NewsImpact:
-    if not text:
-        return _none("empty")
-    if _WAR.search(text):
-        return _hit(-1, "风险事件偏美元，欧元承压")
-    if _FRANCE_YIELD_UP.search(text):
-        return _hit(-1, "法国或欧债溢价上升，欧元承压")
-    if _FRANCE_YIELD_DOWN.search(text):
-        return _hit(1, "法国或欧债溢价回落，欧元压力减轻")
-    if _has_us_macro(text):
-        gold = classify_gold_news(text)
-        if gold.direction != 0:
-            return _hit(gold.direction, "美元宏观：欧元与黄金同向于美元强弱")
-    return _none("这条新闻没有欧元方向")
-
-
-def _dollar_impact(text: str) -> NewsImpact:
-    if not text or _WAR.search(text) or not _has_us_macro(text):
-        return _none("这条新闻没有美元兑日元方向")
-    gold = classify_gold_news(text)
-    if gold.direction == 0:
-        return _none("美国宏观方向不确定，不映射美日")
-    return _hit(-gold.direction, "美元宏观：美日与黄金方向相反")
-
-
-def _nasdaq_impact(text: str) -> NewsImpact:
-    if not text:
-        return _none("empty")
-    if _WAR.search(text):
-        return _hit(-1, "风险事件偏空股指")
-    if _has_us_macro(text):
-        gold = classify_gold_news(text)
-        if gold.direction != 0:
-            return _hit(gold.direction, "美国利率新闻：股指与黄金同向于宽松或收紧")
-    return _none("这条新闻没有纳指方向")
-
-
-def _crypto_impact(text: str) -> NewsImpact:
-    return classify_btc_news(text)
-
-
-def _has_us_macro(text: str) -> bool:
-    lowered = text.lower()
-    return any(token.lower() in lowered for token in _US_MACRO)
-
-
-def _hit(direction: int, reason: str) -> NewsImpact:
-    return NewsImpact(direction=direction, importance=2, confidence=0.75, reason=reason)
-
-
-def _none(reason: str) -> NewsImpact:
-    return NewsImpact(direction=0, importance=0, confidence=0.0, reason=reason)

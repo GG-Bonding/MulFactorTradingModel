@@ -16,6 +16,8 @@ from rich.table import Table
 from rich.text import Text
 
 from gold_signal.europe import append_europe, classify_europe, fetch_europe_snapshot
+from gold_signal.fred import as_record, fetch_us_real_yield_10y
+from gold_signal.outcomes import load_events, win_rate_table
 from gold_signal.tape import GROUP_LABELS, GROUP_ORDER, fetch_tape
 from gold_signal.jin10 import SHANGHAI, Jin10Client, Jin10Error, parse_time
 from gold_signal.market import fetch_binance_bars, fetch_binance_price, snapshot
@@ -46,7 +48,7 @@ CONSOLE = Console()
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser(description="Gold Realtime Signal Engine V0")
-    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape", "polymarket"), required=True)
+    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape", "polymarket", "stats", "yield"), required=True)
     parser.add_argument("--book", choices=("gold", "btc", "all"), default="gold")
     parser.add_argument("--interval", type=int, default=None, help="seconds between ticks")
     parser.add_argument("--ticks", type=int, default=0, help="ticks then exit; 0 = forever (live) or one shot (europe)")
@@ -68,6 +70,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_tape(interval=interval, ticks=args.ticks or 1)
         if args.mode == "polymarket":
             return run_polymarket(interval=interval, ticks=args.ticks or 1)
+        if args.mode == "stats":
+            return run_stats()
+        if args.mode == "yield":
+            return run_yield()
         return run_live(engine, store, interval=interval, ticks=args.ticks, book=args.book)
     except (Jin10Error, RuntimeError) as exc:
         CONSOLE.print(f"[red]{exc}[/red]")
@@ -287,6 +293,40 @@ def run_europe(interval: int, ticks: int) -> int:
     finally:
         if client is not None:
             client.close()
+    return 0
+
+
+def run_stats() -> int:
+    rows = load_events(EVENTS_PATH)
+    CONSOLE.print(f"events={len(rows)} file={EVENTS_PATH}")
+    table = Table(title="Win rate after the news")
+    table.add_column("horizon")
+    table.add_column("status")
+    table.add_column("samples")
+    table.add_column("waiting")
+    table.add_column("wins")
+    table.add_column("win rate")
+    for row in win_rate_table(rows):
+        rate = "INSUFFICIENT" if row["win_rate"] is None else f"{row['win_rate']:.1%}"
+        table.add_row(row["horizon"], row["status"], str(row["samples"]), str(row["waiting"]), str(row["wins"]), rate)
+    CONSOLE.print(table)
+    return 0
+
+
+def run_yield() -> int:
+    try:
+        point = fetch_us_real_yield_10y()
+    except RuntimeError as exc:
+        CONSOLE.print(f"[red]{exc}[/red]")
+        return 1
+    record = as_record(point)
+    if record.get("value") is None:
+        CONSOLE.print(f"US 10Y real yield MISSING  [{record['source']}]")
+        return 0
+    CONSOLE.print(
+        f"US 10Y real yield {record['value']:.2f}%  date {record['timestamp']}  [{record['source']}]\n"
+        "This is not a gold BUY or SELL. Do not use the print before its observation date."
+    )
     return 0
 
 

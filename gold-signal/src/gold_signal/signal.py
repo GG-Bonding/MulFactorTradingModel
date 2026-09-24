@@ -313,6 +313,7 @@ class EventLog:
             "product": result.product,
             "news": result.news,
             "signal": result.signal.value,
+            "news_direction": result.news_direction,
             "strength": result.strength,
             "anchor_price": result.anchor_price,
             "anchor_ts": None if result.anchor_ts is None else result.anchor_ts.isoformat(),
