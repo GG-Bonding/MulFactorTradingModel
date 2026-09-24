@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from gold_signal.jin10 import parse_flash_list, parse_kline, parse_quote
-from gold_signal.market import asset_move, compute_returns, normalized_move, rolling_std_1m
+from gold_signal.market import asset_move, compute_returns, event_reaction, normalized_move, rolling_std_1m
 from gold_signal.models import Bar, Thresholds
 
 
@@ -86,3 +86,30 @@ def test_parse_binance_klines():
     assert bars[-1].close == 76810.0
     rets = compute_returns(bars)
     assert abs(rets["return_1m"] - (76810.0 / 76827.53 - 1)) < 1e-12
+
+
+def test_event_return_starts_at_the_news_not_three_minutes_earlier():
+    published = datetime(2026, 9, 13, 14, 31, 40, tzinfo=timezone.utc)
+    bars = [
+        Bar(ts=published - timedelta(minutes=3), close=4995.0),
+        Bar(ts=published - timedelta(seconds=40), close=5000.0),
+        Bar(ts=published - timedelta(seconds=5), close=5010.0),
+        Bar(ts=published + timedelta(seconds=20), close=5011.0),
+        Bar(ts=published + timedelta(seconds=70), close=5011.0),
+    ]
+    reaction = event_reaction(bars, published, published + timedelta(seconds=80))
+    assert reaction.anchor_price == 5010.0
+    assert reaction.return_15s is None
+    assert abs(reaction.return_30s - (5011.0 / 5010.0 - 1)) < 1e-12
+    assert abs(reaction.return_1m - (5011.0 / 5010.0 - 1)) < 1e-12
+    assert reaction.return_3m is None
+    flat = event_reaction(
+        [
+            Bar(ts=published - timedelta(minutes=3), close=4995.0),
+            Bar(ts=published - timedelta(seconds=5), close=5010.0),
+            Bar(ts=published + timedelta(seconds=50), close=5010.0),
+        ],
+        published,
+        published + timedelta(seconds=80),
+    )
+    assert flat.return_1m == 0.0

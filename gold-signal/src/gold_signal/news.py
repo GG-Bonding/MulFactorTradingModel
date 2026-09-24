@@ -31,13 +31,6 @@ RELEVANT_KEYWORDS = (
     "遭袭",
     "军方",
     "霍尔木兹",
-    "比特币",
-    "BTC",
-    "以太坊",
-    "ETH",
-    "加密货币",
-    "加密",
-    "现货ETF",
     "银行危机",
     "金融危机",
     "降息",
@@ -74,8 +67,6 @@ BULLISH_PATTERNS = (
     r"美元.{0,8}(下跌|走弱|大跌|暴跌|下滑)",
     r"(战争|开战|空袭|导弹|军事冲突|冲突升级|地缘政治|袭击|遭袭|霍尔木兹)",
     r"(银行危机|金融危机|违约潮)",
-    r"比特币.{0,12}(上涨|突破|暴涨|新高)",
-    r"(现货ETF).{0,8}(批准|通过|获批)",
     rf"{_BOND_CONTEXT}.{{0,20}}(收益率|yield)?.{{0,12}}(下跌|回落|走低|下行|下滑)",
 )
 
@@ -87,13 +78,11 @@ BEARISH_PATTERNS = (
     r"(零售销售|GDP).{0,12}(好于|高于|超预期|强劲)",
     r"(加息|鹰派|再次加息)",
     r"美元.{0,8}(上涨|走强|大涨|暴涨|升值)",
-    r"比特币.{0,12}(暴跌|大跌|闪崩)",
-    r"(SEC|监管).{0,12}(打击|起诉|禁止|严打)",
     rf"{_BOND_CONTEXT}.{{0,20}}(收益率|yield)?.{{0,12}}(上涨|上升|走高|飙升|上行|攀升)",
 )
 
 
-def classify_news(text: str) -> NewsImpact:
+def classify_gold_news(text: str) -> NewsImpact:
     raw = (text or "").strip()
     if not raw:
         return NewsImpact(direction=0, importance=0, confidence=0.0, reason="empty")
@@ -135,13 +124,42 @@ def classify_news(text: str) -> NewsImpact:
     )
 
 
+def classify_news(text: str) -> NewsImpact:
+    """Gold classifier. Kept as the historical name."""
+    return classify_gold_news(text)
+
+
+_BTC_KEYWORDS = ("比特币", "BTC", "以太坊", "ETH", "加密货币", "加密", "现货ETF")
+_BTC_BULLISH = (
+    r"比特币.{0,12}(上涨|突破|暴涨|新高)",
+    r"(现货ETF).{0,8}(批准|通过|获批)",
+)
+_BTC_BEARISH = (
+    r"比特币.{0,12}(暴跌|大跌|闪崩)",
+    r"(SEC|监管).{0,12}(打击|起诉|禁止|严打)",
+)
+
+
+def classify_btc_news(text: str) -> NewsImpact:
+    raw = (text or "").strip()
+    if not raw or not any(keyword.lower() in raw.lower() for keyword in _BTC_KEYWORDS):
+        return NewsImpact(direction=0, importance=0, confidence=0.0, reason="不是比特币新闻")
+    for pattern in _BTC_BULLISH:
+        if re.search(pattern, raw, flags=re.IGNORECASE):
+            return NewsImpact(direction=1, importance=2, confidence=0.8, reason=f"比特币利多: {pattern}")
+    for pattern in _BTC_BEARISH:
+        if re.search(pattern, raw, flags=re.IGNORECASE):
+            return NewsImpact(direction=-1, importance=2, confidence=0.8, reason=f"比特币利空: {pattern}")
+    return NewsImpact(direction=0, importance=2, confidence=0.4, reason="比特币相关但方向不确定")
+
+
 def is_gold_relevant(text: str) -> bool:
     return any(keyword.lower() in text.lower() for keyword in RELEVANT_KEYWORDS)
 
 
 def importance_of(text: str) -> int:
     high = ("非农", "CPI", "PCE", "利率决议", "FOMC", "战争", "军事冲突", "金融危机", "霍尔木兹", "袭击", "美债", "美国国债", "实际利率")
-    mid = ("失业率", "初请", "GDP", "零售销售", "Powell", "鲍威尔", "美联储", "美元", "比特币", "BTC", "加密", "国债", "欧债", "收益率")
+    mid = ("失业率", "初请", "GDP", "零售销售", "Powell", "鲍威尔", "美联储", "美元", "国债", "欧债", "收益率")
     if any(k.lower() in text.lower() for k in high):
         return 3
     if any(k.lower() in text.lower() for k in mid):

@@ -25,16 +25,20 @@ from gold_signal.models import (
     FlashNews,
     MarketSnapshot,
     PricedQuote,
+    PolymarketBoard,
     SignalResult,
     SignalSide,
     Thresholds,
 )
-from gold_signal.news import classify_news, news_age_seconds, news_weight
-from gold_signal.signal import SignalEngine, SignalStore
+from gold_signal.news import classify_btc_news, classify_gold_news, news_age_seconds, news_weight
+from gold_signal.polymarket import PolymarketFeed
+from gold_signal.products import SIGNAL_PRODUCTS, fetch_signal_board, impact_for_product, pick_product_news
+from gold_signal.signal import EventLog, SignalEngine, SignalStore
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = ROOT / "tests" / "fixtures"
 DATA_PATH = ROOT / "data" / "signals.jsonl"
+EVENTS_PATH = ROOT / "data" / "events.jsonl"
 EUROPE_PATH = ROOT / "data" / "europe.jsonl"
 CONSOLE = Console()
 
@@ -42,8 +46,8 @@ CONSOLE = Console()
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser(description="Gold Realtime Signal Engine V0")
-    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape"), required=True)
-    parser.add_argument("--book", choices=("gold", "btc"), default="gold")
+    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape", "polymarket"), required=True)
+    parser.add_argument("--book", choices=("gold", "btc", "all"), default="gold")
     parser.add_argument("--interval", type=int, default=None, help="seconds between ticks")
     parser.add_argument("--ticks", type=int, default=0, help="ticks then exit; 0 = forever (live) or one shot (europe)")
     parser.add_argument("--output", type=Path, default=DATA_PATH)
@@ -53,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = SignalEngine()
     interval = args.interval
     if interval is None:
-        interval = 60 if args.mode in ("europe", "tape") else Thresholds.POLL_SECONDS
+        interval = 60 if args.mode in ("europe", "tape", "polymarket") else Thresholds.POLL_SECONDS
 
     try:
         if args.mode == "replay":
@@ -62,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_europe(interval=interval, ticks=args.ticks or 1)
         if args.mode == "tape":
             return run_tape(interval=interval, ticks=args.ticks or 1)
+        if args.mode == "polymarket":
+            return run_polymarket(interval=interval, ticks=args.ticks or 1)
         return run_live(engine, store, interval=interval, ticks=args.ticks, book=args.book)
     except (Jin10Error, RuntimeError) as exc:
         CONSOLE.print(f"[red]{exc}[/red]")
@@ -89,6 +95,7 @@ def run_replay(engine: SignalEngine, store: SignalStore) -> int:
             result.return_15m = _future_return(result.xau_price, future.get("15m"))
             result.return_30m = _future_return(result.xau_price, future.get("30m"))
         store.append(result)
+        EventLog(EVENTS_PATH).upsert(result)
         seen[result.signal.value] += 1
         last_results.append(result)
         CONSOLE.print(render_signal_card(result, market))
@@ -120,10 +127,13 @@ def run_live(
         )
     url = os.getenv("JIN10_MCP_URL") or os.getenv("JIN10_MCP_SERVER_URL") or "https://mcp.jin10.com/mcp"
     client = Jin10Client(token=token, url=url)
+    poly_feed: PolymarketFeed | None = None
     try:
         init = client.connect()
         CONSOLE.print(f"Jin10 connected. tools={client.tool_names()} book={book}")
         CONSOLE.print(f"initialize protocol={init.get('protocolVersion')}")
+        if book == "all":
+            return _run_all_products(client, engine, store, interval, ticks)
         pending: list[dict[str, Any]] = []
         history: list[SignalResult] = []
         tape = QuoteTape()
@@ -131,6 +141,15 @@ def run_live(
         last_market = None
         europe_verdict: EuropeVerdict | None = None
         last_europe_ts = 0.0
+        polymarket_board: PolymarketBoard | None = None
+        if book == "gold":
+            poly_feed = PolymarketFeed()
+            try:
+                polymarket_board = poly_feed.start()
+            except RuntimeError as exc:
+                CONSOLE.print(f"[yellow]polymarket feed failed: {exc}[/yellow]")
+                poly_feed.stop()
+                poly_feed = None
         with Live(console=CONSOLE, refresh_per_second=4) as live:
             while True:
                 tick += 1
@@ -144,12 +163,18 @@ def run_live(
                         news_list = merge_news(news_list, client.search_flash(keyword))
                     except Jin10Error as exc:
                         CONSOLE.print(f"[yellow]search_flash({keyword}) failed: {exc}[/yellow]")
-                news = pick_news(news_list, datetime.now(tz=SHANGHAI))
+                now = datetime.now(tz=SHANGHAI)
+                if book == "btc":
+                    news = pick_news(news_list, now, classifier=classify_btc_news)
+                else:
+                    news = pick_news(news_list, now)
                 market = fetch_market(client, tape, book=book)
                 last_market = market
                 now = market.as_of
-                result = engine.evaluate(news, market, now=now)
+                impact = classify_btc_news(news.text) if book == "btc" and news else None
+                result = engine.evaluate(news, market, now=now, impact=impact)
                 store.append(result)
+                EventLog(EVENTS_PATH).upsert(result)
                 if result.signal in (SignalSide.BUY, SignalSide.SELL) and result.is_primary:
                     pending.append(
                         {
@@ -168,6 +193,8 @@ def run_live(
                     except (Jin10Error, RuntimeError) as exc:
                         CONSOLE.print(f"[yellow]europe fetch failed: {exc}[/yellow]")
                     last_europe_ts = time.time()
+                if poly_feed is not None:
+                    polymarket_board = poly_feed.snapshot()
                 live.update(
                     render_dashboard(
                         market,
@@ -176,6 +203,7 @@ def run_live(
                         history[-10:],
                         mode=f"live/{book}",
                         europe=europe_verdict,
+                        polymarket=polymarket_board,
                     )
                 )
                 if ticks and tick >= ticks:
@@ -184,7 +212,46 @@ def run_live(
         if history and last_market is not None:
             CONSOLE.print(render_signal_card(history[-1], last_market))
     finally:
+        if poly_feed is not None:
+            poly_feed.stop()
         client.close()
+    return 0
+
+
+def _run_all_products(
+    client: Jin10Client,
+    engine: SignalEngine,
+    store: SignalStore,
+    interval: int,
+    ticks: int,
+) -> int:
+    tick = 0
+    while True:
+        tick += 1
+        news_list = client.list_flash()
+        for keyword in ("黄金", "美联储", "国债", "美债", "原油", "欧元", "纳指", "比特币"):
+            try:
+                news_list = merge_news(news_list, client.search_flash(keyword))
+            except Jin10Error as exc:
+                CONSOLE.print(f"[yellow]search_flash({keyword}) failed: {exc}[/yellow]")
+        markets, missing = fetch_signal_board(client)
+        for note in missing:
+            CONSOLE.print(f"[yellow]{note}[/yellow]")
+        now = datetime.now(tz=SHANGHAI)
+        CONSOLE.rule(f"product signals {now.strftime('%H:%M:%S')}")
+        for spec, market in markets:
+            news = pick_product_news(news_list, now, spec.family)
+            impact = impact_for_product(news.text, spec.family) if news else None
+            result = engine.evaluate(news, market, now=now, impact=impact)
+            store.append(result)
+            EventLog(EVENTS_PATH).upsert(result)
+            CONSOLE.print(render_signal_card(result, market))
+        if not markets:
+            CONSOLE.print("[yellow]no product had 1m bars[/yellow]")
+        CONSOLE.print(f"products={len(SIGNAL_PRODUCTS)} priced={len(markets)}")
+        if ticks and tick >= ticks:
+            break
+        time.sleep(interval)
     return 0
 
 
@@ -220,6 +287,35 @@ def run_europe(interval: int, ticks: int) -> int:
     finally:
         if client is not None:
             client.close()
+    return 0
+
+
+def run_polymarket(interval: int, ticks: int) -> int:
+    feed = PolymarketFeed()
+    try:
+        CONSOLE.print(render_polymarket(feed.start()))
+        deadline = time.time() + 8
+        while time.time() < deadline and feed.updates == 0:
+            time.sleep(0.2)
+        board = feed.snapshot()
+        CONSOLE.print(render_polymarket(board))
+        CONSOLE.print(f"clob updates={feed.updates}")
+        if feed.error:
+            CONSOLE.print(f"[yellow]clob: {feed.error}[/yellow]")
+        if ticks <= 1:
+            return 0
+        seen = feed.updates
+        tick = 1
+        while True:
+            time.sleep(interval)
+            tick += 1
+            if feed.updates != seen:
+                seen = feed.updates
+                CONSOLE.print(render_polymarket(feed.snapshot()))
+            if ticks and tick >= ticks:
+                break
+    finally:
+        feed.stop()
     return 0
 
 
@@ -344,10 +440,14 @@ def merge_news(left: list[FlashNews], right: list[FlashNews]) -> list[FlashNews]
     return out
 
 
-def pick_news(items: list[FlashNews], now: datetime) -> FlashNews | None:
+def pick_news(
+    items: list[FlashNews],
+    now: datetime,
+    classifier=classify_gold_news,
+) -> FlashNews | None:
     ranked: list[tuple[int, float, FlashNews]] = []
     for item in items:
-        impact = classify_news(item.text)
+        impact = classifier(item.text)
         if impact.importance <= 0:
             continue
         age = news_age_seconds(item, now)
@@ -450,16 +550,25 @@ def render_signal_card(result: SignalResult, market: MarketSnapshot) -> Panel:
     body.append(result.timestamp.strftime("%Y-%m-%d %H:%M:%S") + "\n\n")
     body.append(f"Signal:      {result.signal.value}\n", style=_signal_style(result.signal))
     body.append(f"Score:       {result.score:+d}\n")
-    body.append(f"Confidence:  {int(result.confidence * 100)}%\n\n")
+    body.append(f"Strength:    {result.strength}/100\n\n")
     body.append("News:\n")
     body.append((result.news or "(none)") + "\n\n")
     body.append(f"News Impact:\n{result.news_impact_label} {b.news:+d}\n\n")
-    body.append("Market Reaction:\n")
-    body.append(f"{market.xau.code} 1m     {market.xau.return_1m:+.2%}   {b.gold_1m:+d}\n")
-    body.append(f"{market.xau.code} 3m     {market.xau.return_3m:+.2%}   {b.gold_3m:+d}\n\n")
-    body.append("Confirmation:\n")
-    body.append(f"{market.xag.code} 1m     {market.xag.return_1m:+.2%}   {b.silver:+d}\n")
-    body.append(f"{market.eurusd.code} 1m     {market.eurusd.return_1m:+.2%}   {b.eurusd:+d}\n\n")
+    body.append("After the news, from the price at the headline:\n")
+    anchor = "no anchor" if result.anchor_price is None else f"anchor {result.anchor_price:.4f}"
+    body.append(f"{anchor}\n")
+    body.append(f"{market.xau.code} +15s   {_fmt_ret(result.reaction_15s)}\n")
+    body.append(f"{market.xau.code} +30s   {_fmt_ret(result.reaction_30s)}\n")
+    body.append(f"{market.xau.code} +1m    {_fmt_ret(result.reaction_1m)}   {b.gold_1m:+d}\n")
+    body.append(f"{market.xau.code} +3m    {_fmt_ret(result.reaction_3m)}   {b.gold_3m:+d}\n")
+    body.append(f"{market.xau.code} +5m    {_fmt_ret(result.reaction_5m)}\n\n")
+    body.append("Confirmation, same window:\n")
+    body.append(f"{market.xag.code} +1m    {_fmt_ret(result.xag_1m) if result.reaction_1m is not None else 'waiting'}   {b.silver:+d}\n")
+    if market.eurusd.code == "FLAT":
+        body.append("第二确认   无\n\n")
+    else:
+        third = None if result.reaction_1m is None else result.eurusd_1m
+        body.append(f"{market.eurusd.code} +1m    {_fmt_ret(third)}   {b.eurusd:+d}\n\n")
     body.append("Reason:\n")
     body.append(result.reason + "\n")
     if result.return_1m is not None:
@@ -491,6 +600,29 @@ def render_tape(rows: list[PricedQuote]) -> Panel:
             )
         body.append("\n")
     return Panel(body, title="Priced tape", subtitle="missing stays missing")
+
+
+def render_polymarket(board: PolymarketBoard) -> Panel:
+    body = Text()
+    body.append("Prediction odds. These do not create a BUY or SELL.\n\n", style="bold")
+    current = ""
+    for row in board.contracts:
+        if row.topic != current:
+            current = row.topic
+            body.append(f"{row.topic}: {row.event}\n", style="bold")
+        if row.yes is None:
+            body.append(f"  {row.question[:72]}  MISSING  {row.missing or ''}\n")
+            continue
+        updated = (row.updated_at or "no-ts")[:19]
+        channel = "clob" if "CLOB" in row.source else "gamma"
+        body.append(
+            f"  Yes {row.yes:.1%}  {channel}  {updated}  {row.question[:60]}\n"
+        )
+    if board.missing:
+        body.append("\nMissing\n", style="bold")
+        for item in board.missing:
+            body.append(f"  • {item}\n")
+    return Panel(body, title="Polymarket", subtitle="odds are not a trade")
 
 
 def render_europe_panel(verdict: EuropeVerdict) -> Panel:
@@ -582,15 +714,16 @@ def render_dashboard(
     history: list[SignalResult],
     mode: str,
     europe: EuropeVerdict | None = None,
+    polymarket: PolymarketBoard | None = None,
 ) -> Table:
     layout = Table.grid(expand=True)
     header = Text(f"Gold Signal Engine V0  [{mode}]", style="bold")
     prices = Table(show_header=False, box=None)
     prices.add_row(market.xau.code, f"{market.xau.price:.2f}")
-    prices.add_row("1m", f"{market.xau.return_1m:+.2%}")
-    prices.add_row("3m", f"{market.xau.return_3m:+.2%}")
-    prices.add_row(market.xag.code, f"{market.xag.return_1m:+.2%}")
-    prices.add_row(market.eurusd.code, f"{market.eurusd.return_1m:+.2%}")
+    prices.add_row("+1m", _fmt_ret(result.reaction_1m))
+    prices.add_row("+3m", _fmt_ret(result.reaction_3m))
+    prices.add_row(market.xag.code, _fmt_ret(None if result.reaction_1m is None else result.xag_1m))
+    prices.add_row(market.eurusd.code, _fmt_ret(None if result.reaction_1m is None else result.eurusd_1m))
 
     event = Text()
     if news:
@@ -610,7 +743,7 @@ def render_dashboard(
     scores.add_row("TOTAL", f"{result.breakdown.total:+d}")
 
     sig = Text(
-        f"{result.signal.value}\nConfidence {int(result.confidence * 100)}%",
+        f"{result.signal.value}\nStrength {result.strength}/100",
         style=_signal_style(result.signal),
         justify="center",
     )
@@ -644,6 +777,12 @@ def render_dashboard(
         if europe.not_proven:
             compact.append("Not proven: " + europe.not_proven[0])
         layout.add_row(Panel(compact, title="Europe (not a gold BUY/SELL)"))
+    if polymarket is not None and polymarket.contracts:
+        odds = Text()
+        for row in polymarket.contracts[:6]:
+            yes = "MISSING" if row.yes is None else f"{row.yes:.0%}"
+            odds.append(f"{row.topic} {yes}  {row.question[:48]}\n")
+        layout.add_row(Panel(odds, title="Polymarket (not a trade)"))
     layout.add_row(recent)
     return layout
 
@@ -665,7 +804,7 @@ def _expected_ok(expected: str, actual: SignalSide) -> bool:
 
 
 def _fmt_ret(value: float | None) -> str:
-    return f"{value:+.2%}" if value is not None else "-"
+    return f"{value:+.2%}" if value is not None else "waiting"
 
 
 if __name__ == "__main__":

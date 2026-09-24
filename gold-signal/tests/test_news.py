@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from gold_signal.models import NewsImpact
-from gold_signal.news import classify_news, news_age_seconds, news_score, news_weight
+from gold_signal.news import classify_btc_news, classify_news, news_age_seconds, news_score, news_weight
 from gold_signal.jin10 import make_event_id
 from gold_signal.models import FlashNews
 
@@ -49,8 +49,14 @@ def test_hormuz_attack_is_bullish_gold():
     assert impact.importance >= 2
 
 
-def test_bitcoin_pump_is_relevant_bullish():
+def test_bitcoin_pump_is_not_a_gold_event():
     impact = classify_news("比特币突破前高并持续上涨")
+    assert impact.direction == 0
+    assert impact.importance == 0
+
+
+def test_bitcoin_pump_is_bullish_for_btc_only():
+    impact = classify_btc_news("比特币突破前高并持续上涨")
     assert impact.direction == 1
     assert impact.importance >= 2
 

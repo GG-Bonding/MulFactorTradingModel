@@ -22,7 +22,7 @@ def test_store_writes_hold_and_buy_and_updates_forward_returns(tmp_path: Path):
         event_id="persist-1",
         title="美国8月非农就业人数低于预期",
         content="美国8月非农就业人数低于预期",
-        published_at=now,
+        published_at=now - timedelta(seconds=70),
     )
     engine = SignalEngine()
     buy = engine.evaluate(news, market, now)

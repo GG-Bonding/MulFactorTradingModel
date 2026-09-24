@@ -46,9 +46,9 @@ class NewsImpact(BaseModel):
     @property
     def label(self) -> str:
         if self.direction > 0:
-            return "BULLISH GOLD"
+            return "BULLISH"
         if self.direction < 0:
-            return "BEARISH GOLD"
+            return "BEARISH"
         return "UNCERTAIN"
 
 
@@ -83,6 +83,19 @@ class Quote(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class EventReaction(BaseModel):
+    """Price change measured from the news timestamp, not from a trailing window."""
+
+    anchor_price: float | None = None
+    anchor_ts: datetime | None = None
+    anchor_gap_seconds: float | None = None
+    return_15s: float | None = None
+    return_30s: float | None = None
+    return_1m: float | None = None
+    return_3m: float | None = None
+    return_5m: float | None = None
+
+
 class AssetMove(BaseModel):
     code: str
     price: float
@@ -100,6 +113,9 @@ class MarketSnapshot(BaseModel):
     xag: AssetMove
     eurusd: AssetMove
     as_of: datetime
+    xau_bars: list[Bar] = Field(default_factory=list)
+    xag_bars: list[Bar] = Field(default_factory=list)
+    eurusd_bars: list[Bar] = Field(default_factory=list)
 
 
 class ScoreBreakdown(BaseModel):
@@ -116,16 +132,24 @@ class SignalResult(BaseModel):
     timestamp: datetime
     signal: SignalSide
     score: int
-    confidence: float
+    strength: int = 0
     news: str
     news_direction: int
     news_impact_label: str
     event_id: str | None = None
+    product: str = "XAUUSD"
     xau_price: float
     xau_1m: float
     xau_3m: float
     xag_1m: float
     eurusd_1m: float
+    anchor_price: float | None = None
+    anchor_ts: datetime | None = None
+    reaction_15s: float | None = None
+    reaction_30s: float | None = None
+    reaction_1m: float | None = None
+    reaction_3m: float | None = None
+    reaction_5m: float | None = None
     breakdown: ScoreBreakdown
     reason: str
     is_primary: bool = True
@@ -178,6 +202,28 @@ class PricedQuote(BaseModel):
     ts: datetime | None = None
     source: str
     missing: str | None = None
+
+
+class PolymarketContract(BaseModel):
+    topic: str
+    event: str
+    question: str
+    slug: str
+    token_id: str | None = None
+    yes: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    volume: float | None = None
+    end_date: str | None = None
+    updated_at: str | None = None
+    source: str = "Polymarket gamma API"
+    missing: str | None = None
+
+
+class PolymarketBoard(BaseModel):
+    as_of: datetime
+    contracts: list[PolymarketContract] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
 
 
 class EuropeVerdict(BaseModel):

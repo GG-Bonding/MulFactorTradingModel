@@ -39,7 +39,8 @@ def test_buy_score():
     result = SignalEngine().evaluate(_news("美国8月非农就业人数低于预期", now), market, now)
     assert result.breakdown.news == 2
     assert result.breakdown.gold_1m == 2
-    assert result.breakdown.gold_3m == 1
+    assert result.breakdown.gold_3m == 0
+    assert result.reaction_3m is None
     assert result.breakdown.silver == 1
     assert result.breakdown.eurusd == 1
     assert result.score >= 5
@@ -136,3 +137,19 @@ def test_dedup_same_news_only_one_primary_buy():
 
 def test_classify_used_by_engine():
     assert classify_news("美国8月非农就业人数低于预期").direction == 1
+
+
+def test_rally_before_the_news_is_not_confirmation():
+    now = datetime(2026, 9, 13, 14, 35, 12, tzinfo=timezone.utc)
+    market = _market(
+        now,
+        _quiet_then(3600.0, [3600.0, 3614.0, 3614.0, 3614.0]),
+        _quiet_then(42.0, [42.0, 42.16, 42.16, 42.16]),
+        _quiet_then(1.10, [1.10, 1.104, 1.104, 1.104]),
+    )
+    news = _news("美国8月非农就业人数低于预期", now, age_sec=50)
+    result = SignalEngine().evaluate(news, market, now)
+    assert result.reaction_1m is None
+    assert result.breakdown.gold_1m == 0
+    assert result.breakdown.gold_3m == 0
+    assert result.signal == SignalSide.HOLD

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from gold_signal.models import AssetMove, Bar, MarketSnapshot, Thresholds
+from gold_signal.models import AssetMove, Bar, EventReaction, MarketSnapshot, Thresholds
 
 BINANCE_VISION = "https://data-api.binance.vision"
 
@@ -80,6 +80,65 @@ def asset_move(code: str, bars: list[Bar], current_price: float | None = None) -
     )
 
 
+def price_asof(points: list[Bar], when: datetime) -> Bar | None:
+    eligible = [bar for bar in points if bar.ts <= when]
+    if not eligible:
+        return None
+    return max(eligible, key=lambda bar: bar.ts)
+
+
+def event_reaction(
+    bars: list[Bar],
+    published_at: datetime,
+    now: datetime,
+    *,
+    extra: list[Bar] | None = None,
+    max_anchor_gap: float = 90.0,
+) -> EventReaction:
+    """R(horizon) = P(news + horizon) / P(news) - 1.
+
+    A horizon stays empty until that clock time has arrived and a later print
+    exists inside the window. A rally that finished before the news is not a reaction.
+    """
+    points = sorted([*(bars or []), *(extra or [])], key=lambda bar: bar.ts)
+    anchor = price_asof(points, published_at)
+    if anchor is None or anchor.close == 0:
+        return EventReaction()
+    gap = (published_at - anchor.ts).total_seconds()
+    if gap > max_anchor_gap:
+        return EventReaction(
+            anchor_price=anchor.close,
+            anchor_ts=anchor.ts,
+            anchor_gap_seconds=gap,
+        )
+    return EventReaction(
+        anchor_price=anchor.close,
+        anchor_ts=anchor.ts,
+        anchor_gap_seconds=gap,
+        return_15s=_horizon_return(points, anchor, published_at, now, 15),
+        return_30s=_horizon_return(points, anchor, published_at, now, 30),
+        return_1m=_horizon_return(points, anchor, published_at, now, 60),
+        return_3m=_horizon_return(points, anchor, published_at, now, 180),
+        return_5m=_horizon_return(points, anchor, published_at, now, 300),
+    )
+
+
+def _horizon_return(
+    points: list[Bar],
+    anchor: Bar,
+    published_at: datetime,
+    now: datetime,
+    horizon_seconds: int,
+) -> float | None:
+    deadline = published_at + timedelta(seconds=horizon_seconds)
+    if now < deadline:
+        return None
+    inside = [bar for bar in points if anchor.ts < bar.ts <= deadline]
+    if not inside:
+        return None
+    return inside[-1].close / anchor.close - 1
+
+
 def snapshot(
     xau_bars: list[Bar],
     xag_bars: list[Bar],
@@ -99,6 +158,9 @@ def snapshot(
         xag=asset_move(confirm_code, xag_bars, xag_price),
         eurusd=asset_move(dollar_code, eurusd_bars, eurusd_price),
         as_of=as_of or max(bar.ts for bar in xau_bars),
+        xau_bars=list(xau_bars),
+        xag_bars=list(xag_bars),
+        eurusd_bars=list(eurusd_bars),
     )
 
 

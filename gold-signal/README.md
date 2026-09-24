@@ -68,6 +68,23 @@ python -m gold_signal.main --mode live
 python -m gold_signal.main --mode live --book btc
 ```
 
+每个产品单独一条信号，不再把所有新闻都打到黄金上：
+
+```bash
+python -m gold_signal.main --mode live --book all --ticks 1
+```
+
+| 产品 | 新闻怎么映射 | 价格 |
+| --- | --- | --- |
+| XAUUSD / XAGUSD | 沿用黄金规则 | 金十 1 分钟 |
+| EURUSD | 美国宽松偏多欧元；战争和法国国债收益率上升偏空欧元 | 金十 |
+| USDJPY | 只跟美国利率，方向与黄金相反；战争不猜 | 金十 |
+| USOIL / UKOIL | 只跟原油供给和战争冲击；CPI 不会自动打成原油 | 金十 |
+| 纳指 `NQ=F` | 美国利率与黄金同向于宽松；战争偏空股指；法国国债不映射 | Yahoo 1 分钟 |
+| BTCUSDT | 只跟比特币自己的涨跌和监管；宏观不直接映射 | Binance |
+
+确认腿必须和该产品同向。价格不确认就 HOLD。没有 1 分钟 K 线的产品本轮跳过，不编信号。美股个股仍只在 `--mode tape` 报价。
+
 可选：
 
 ```bash
@@ -78,7 +95,11 @@ Live 会调用金十官方 MCP：`list_flash`、`get_quote`、`get_kline`。工�
 
 ## 当前规则
 
-判断顺序：新闻 → 黄金有没有反应 → 白银/EURUSD 确认 → 信号。
+判断顺序：新闻提出方向 → 只看新闻时刻之后的价格 → 确认腿同窗口 → 信号。
+
+1 分钟和 3 分钟收益是 \(P(t_{news}+\Delta)/P(t_{news})-1\)，不是当前价相对 3 分钟前的涨跌。新闻之前的行情不算反应。+15 秒、+30 秒、+1 分钟、+3 分钟、+5 分钟写进 `data/events.jsonl`。没到时间就显示 waiting，不补数字。
+
+终端里的 `Strength 82/100` 是规则强度，不是上涨概率。
 
 各国国债收益率按持有成本处理：收益率/实际利率上升偏空黄金，回落偏多黄金。仍要等金价确认，新闻本身不会直接 BUY/SELL。
 
@@ -115,6 +136,16 @@ python -m gold_signal.main --mode tape --ticks 1
 
 金十快讯不是推送流。Live 每 8 秒拉一次 `list_flash`（可带 `cursor` 翻更早的页）。MCP 响应里的 SSE 只是这一次 HTTP 调用的返回格式。
 
+## Polymarket
+
+先用公开 Gamma 搜索找到合约，再用公开 CLOB 订单簿推送更新 Yes 价，不需要 token，也不进买卖分。推送断了就留着上一笔，并在面板上标成 gamma 而不是 clob。
+
+```bash
+python -m gold_signal.main --mode polymarket --ticks 1
+```
+
+固定搜索：`Fed decision`、`US recession`、`CPI`、`gold`、`crude oil`。优先用标题对得上的未关闭事件，再取成交量最高的几个合约。Yes 价缺失就标 missing。黄金 Live 大约每 5 分钟附带一条，失败不影响信号。
+
 ## 当前规则
 | --- | --- |
 | 强利多 / 强利空新闻 | +2 / -2 |
@@ -125,7 +156,7 @@ python -m gold_signal.main --mode tape --ticks 1
 
 阈值集中在 `src/gold_signal/models.py` 的 `Thresholds`：
 
-- 明显移动：`|return| >= 0.08%`（1m）或 `|z| >= 1.5`
+- 明显移动：新闻后的 `|return| >= 0.08%`（1 分钟）或 `|return| >= 0.12%`（3 分钟）
 - `score >= +5` 且黄金 1m 为正 → `BUY`
 - `score <= -5` 且黄金 1m 为负 → `SELL`
 - 其他 → `HOLD`
