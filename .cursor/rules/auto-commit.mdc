@@ -1,14 +1,14 @@
 ---
-description: Commit local code changes after each completed modification
+description: Commit and push code changes after each completed modification
 alwaysApply: true
 ---
 
 # Auto-commit
 
-After a code change is finished and checks that apply have been run, create a local git commit before ending the turn.
+After a code change is finished and checks that apply have been run, commit it and push to the tracked remote before ending the turn.
 
 - Commit only the files changed for that task.
 - Do not commit secrets (`.env`, credentials, tokens).
-- Do not push unless the user asks.
+- Push the current branch after the commit. Do not force-push.
 - Do not commit when the worktree has no changes.
 - Use a short message that says why the change was made.
