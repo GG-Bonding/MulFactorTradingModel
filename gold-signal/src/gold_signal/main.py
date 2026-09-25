@@ -419,11 +419,19 @@ def run_backtest(strategy: Path, start: str, end: str) -> int:
     net = report.get("net") or {}
     if net:
         CONSOLE.print(
-            f"horizon={report.get('horizon')} net_avg={_fmt_stat(net.get('avg_return'))} "
+            f"horizon={report.get('horizon')} samples={net.get('samples')} "
+            f"net_avg={_fmt_stat(net.get('avg_return'))} "
             f"median={_fmt_stat(net.get('median_return'))} "
-            f"p25={_fmt_stat(net.get('p25'))} p75={_fmt_stat(net.get('p75'))} "
-            f"ev={_fmt_stat(net.get('expectancy'))} pf={_fmt_stat(net.get('profit_factor'))}"
+            f"win_rate={_fmt_stat(net.get('win_rate'))} "
+            f"mfe={_fmt_stat(net.get('avg_mfe'))} mae={_fmt_stat(net.get('avg_mae'))} "
+            f"pf={_fmt_ratio(net.get('profit_factor'))}"
         )
+        costs = report.get("costs") or {}
+        if costs:
+            CONSOLE.print(
+                f"costs spread={costs.get('spread_cost')} slippage={costs.get('slippage_cost')} "
+                f"commission={costs.get('commission')}"
+            )
     for name, window in (report.get("windows") or {}).items():
         CONSOLE.print(
             f"{name} {window['start']} → {window['end']} status={window['status']} "
@@ -447,6 +455,10 @@ def _event_type(news: FlashNews | None, impact: object | None) -> str:
 
 def _fmt_stat(value: float | None) -> str:
     return "INSUFFICIENT" if value is None else f"{value:+.4%}"
+
+
+def _fmt_ratio(value: float | None) -> str:
+    return "INSUFFICIENT" if value is None else f"{value:.2f}"
 
 
 def run_yield() -> int:

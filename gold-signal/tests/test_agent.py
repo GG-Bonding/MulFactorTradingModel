@@ -10,6 +10,7 @@ from gold_signal.agent import (
     agent_view,
     compare_runs,
     deploy_agent,
+    format_agent_view,
     order_from_decision,
     order_from_text,
 )
@@ -112,6 +113,15 @@ def test_compiled_idea_replays_the_same_way_twice_and_refuses_an_unsafe_factor()
     assert first["status"] == "OK"
     assert first["samples"] == 1
     assert first["counts"]["long"] == 1
+    net = first["net"]
+    assert net["win_rate"] == 1
+    assert net["avg_return"] is not None
+    assert net["median_return"] == net["avg_return"]
+    assert net["avg_mfe"] is not None
+    assert net["avg_mae"] is not None
+    assert "profit_factor" in net
+    assert first["costs"]["spread_cost"] > 0
+    assert first["windows"]["oos"]["samples"] == 1
     decision, outcomes = replay_event(nfp.spec, news, tape)
     assert decision.side == "LONG"
     assert decision.entry_price == 3810.0
@@ -148,11 +158,23 @@ def test_agent_card_names_the_conditions_and_compares_paper():
     assert view["side"] == "LONG"
     assert view["entry"] == 3810.0
     assert all(row["passed"] for row in view["conditions"])
+    labels = " ".join(row["label"] for row in view["conditions"])
+    assert "非农低于预期" in labels
+    assert "XAUUSD.reaction_1m" in labels
+    assert "XAGUSD.reaction_1m" in labels
     assert view["comparison"]["historical_samples"] == 1
+    assert view["comparison"]["historical_avg_net"] is not None
     assert view["comparison"]["paper_samples"] == 2
+    assert view["comparison"]["paper_avg_net"] is not None
     assert view["comparison"]["oos_samples"] == 1
+    assert view["comparison"]["oos_avg_net"] == view["comparison"]["historical_avg_net"]
+    card = format_agent_view(view)
+    assert "当前判断" in card and "LONG XAUUSD" in card
+    assert "触发条件" in card and "PASS" in card
+    assert "Reason" in card and view["reason"] in card
     compared = compare_runs(report, [0.001])
     assert compared["paper_avg_net"] == 0.001
+    assert compared["historical_avg_net"] == view["comparison"]["historical_avg_net"]
 
 
 def test_execution_accepts_only_a_versioned_engine_decision():
