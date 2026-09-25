@@ -18,7 +18,7 @@ from rich.text import Text
 from gold_signal.europe import append_europe, classify_europe, fetch_europe_snapshot
 from gold_signal.fred import as_record, fetch_us_real_yield_10y
 from gold_signal.hypothesis import evaluate_hypothesis, historical_validation, load_hypothesis
-from gold_signal.outcomes import load_events, win_rate_table
+from gold_signal.observation import Recorder
 from gold_signal.tape import GROUP_LABELS, GROUP_ORDER, fetch_tape
 from gold_signal.jin10 import SHANGHAI, Jin10Client, Jin10Error, parse_time
 from gold_signal.market import fetch_binance_bars, fetch_binance_price, snapshot
@@ -42,6 +42,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = ROOT / "tests" / "fixtures"
 DATA_PATH = ROOT / "data" / "signals.jsonl"
 EVENTS_PATH = ROOT / "data" / "events.jsonl"
+HISTORY_PATH = ROOT / "data" / "history" / "live.jsonl"
 EUROPE_PATH = ROOT / "data" / "europe.jsonl"
 CONSOLE = Console()
 
@@ -193,6 +194,29 @@ def run_live(
                 result = engine.evaluate(news, market, now=now, impact=impact)
                 store.append(result)
                 EventLog(EVENTS_PATH).upsert(result)
+                Recorder(HISTORY_PATH).append(
+                    "observation",
+                    {
+                        "factor": f"market.{market.xau.code}.close",
+                        "value": market.xau.price,
+                        "observed_at": market.as_of,
+                        "available_at": market.as_of,
+                        "ingested_at": datetime.now(tz=SHANGHAI),
+                        "source": "live",
+                    },
+                )
+                if news is not None:
+                    Recorder(HISTORY_PATH).append(
+                        "event",
+                        {
+                            "event_id": news.event_id,
+                            "published_at": news.published_at,
+                            "available_at": news.published_at,
+                            "ingested_at": datetime.now(tz=SHANGHAI),
+                            "title": news.title,
+                            "source": "jin10",
+                        },
+                    )
                 if result.signal in (SignalSide.BUY, SignalSide.SELL) and result.is_primary:
                     pending.append(
                         {
