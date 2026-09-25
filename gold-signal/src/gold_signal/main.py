@@ -52,7 +52,8 @@ CONSOLE = Console()
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser(description="Gold Realtime Signal Engine V0")
-    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape", "polymarket", "stats", "yield", "hypothesis", "backtest"), required=True)
+    parser.add_argument("--mode", choices=("replay", "live", "europe", "tape", "polymarket", "stats", "yield", "hypothesis", "backtest", "compile", "agent"), required=True)
+    parser.add_argument("--text", default=None, help="trading idea in plain language")
     parser.add_argument("--strategy", type=Path, default=None)
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
@@ -89,7 +90,26 @@ def main(argv: list[str] | None = None) -> int:
             if args.strategy is None or not args.start or not args.end:
                 raise RuntimeError("--strategy, --start, and --end are required")
             return run_backtest(args.strategy, args.start, args.end)
-        return run_live(engine, store, interval=interval, ticks=args.ticks, book=args.book)
+        if args.mode == "compile":
+            if not args.text:
+                raise RuntimeError("--text is required")
+            from gold_signal.agent import run_compile_cli
+
+            return run_compile_cli(args.text)
+        if args.mode == "agent":
+            if args.strategy is None:
+                raise RuntimeError("--strategy is required")
+            from gold_signal.agent import run_agent_cli
+
+            return run_agent_cli(args.strategy, ROOT / "data" / "history" / "archive.jsonl")
+        return run_live(
+            engine,
+            store,
+            interval=interval,
+            ticks=args.ticks,
+            book=args.book,
+            strategy=args.strategy,
+        )
     except (Jin10Error, RuntimeError) as exc:
         CONSOLE.print(f"[red]{exc}[/red]")
         return 1
@@ -140,6 +160,7 @@ def run_live(
     interval: int,
     ticks: int,
     book: str = "gold",
+    strategy: Path | None = None,
 ) -> int:
     token = os.getenv("JIN10_TOKEN") or os.getenv("JIN10_BEARER_TOKEN")
     if not token:
@@ -148,6 +169,8 @@ def run_live(
         )
     url = os.getenv("JIN10_MCP_URL") or os.getenv("JIN10_MCP_SERVER_URL") or "https://mcp.jin10.com/mcp"
     client = Jin10Client(token=token, url=url)
+    agent_spec = load_hypothesis(strategy) if strategy is not None else None
+    last_agent_key: tuple[str, str, str] | None = None
     poly_feed: PolymarketFeed | None = None
     try:
         init = client.connect()
@@ -204,6 +227,14 @@ def run_live(
                     classifier_version=CLASSIFIER_VERSION,
                     ingested_at=datetime.now(tz=SHANGHAI),
                 )
+                if agent_spec is not None and news is not None:
+                    from gold_signal.agent import format_agent_view, view_from_market
+
+                    card = view_from_market(agent_spec, news, market)
+                    agent_key = (news.event_id, card["side"], card["reason"])
+                    if agent_key != last_agent_key:
+                        CONSOLE.print(format_agent_view(card))
+                        last_agent_key = agent_key
                 if result.signal in (SignalSide.BUY, SignalSide.SELL) and result.is_primary and result.entry is not None:
                     pending.append(
                         {

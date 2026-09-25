@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,42 @@ class HypothesisSpec:
     horizons: tuple[str, ...]
     confirmations: tuple[Condition, ...]
     notes: tuple[str, ...] = ()
+    trigger: str = ""
+
+
+_TRIGGERS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("CPI_BELOW_EXPECTATION", re.compile(r"CPI.{0,16}(低于|不及|回落|降温|弱于|below|miss)", re.IGNORECASE)),
+    ("CPI_ABOVE_EXPECTATION", re.compile(r"CPI.{0,16}(高于|超预期|升温|强于|above|beat)", re.IGNORECASE)),
+    ("NFP_BELOW_EXPECTATION", re.compile(r"非农.{0,16}(低于|不及|逊于|未及)")),
+    ("NFP_ABOVE_EXPECTATION", re.compile(r"非农.{0,16}(高于|超预期|好于|强于)")),
+    ("GEOPOLITICAL_ESCALATION", re.compile(r"(伊朗|冲突升级|战争|空袭|导弹|袭击|遭袭)")),
+)
+
+
+def matching_triggers(text: str) -> tuple[str, ...]:
+    raw = text or ""
+    return tuple(code for code, pattern in _TRIGGERS if pattern.search(raw))
+
+
+def trigger_matches(code: str, text: str) -> bool:
+    return code in matching_triggers(text)
+
+
+def resolve_direction(spec: HypothesisSpec, text: str) -> tuple[int, str | None]:
+    """Side comes from the versioned spec. A trigger that did not happen stays flat."""
+    if spec.trigger and not trigger_matches(spec.trigger, text):
+        return 0, f"trigger {spec.trigger} did not match"
+    if spec.entry == "LONG":
+        return 1, None
+    if spec.entry == "SHORT":
+        return -1, None
+    if spec.entry == "FOLLOW_NEWS":
+        impact = apply_transmission(text, spec.family) if text else None
+        direction = 0 if impact is None else impact.direction
+        if direction == 0:
+            return 0, "news has no direction for this asset"
+        return direction, None
+    return 0, f"unsupported entry {spec.entry}"
 
 
 @dataclass
@@ -78,6 +115,11 @@ def parse_hypothesis(text: str) -> HypothesisSpec:
         if line.startswith("- ") and indent >= 2 and mode == "notes":
             notes.append(line[2:].strip())
             continue
+        if mode == "trigger" and indent >= 2 and ":" in line:
+            key, value = _split_kv(line)
+            if key == "event" and value:
+                data["trigger"] = value
+            continue
         if line.startswith("- ") and mode == "confirmations":
             flush()
             pending = {}
@@ -111,6 +153,7 @@ def parse_hypothesis(text: str) -> HypothesisSpec:
         horizons=tuple(horizons),
         confirmations=tuple(confirmations),
         notes=tuple(notes),
+        trigger=str(data.get("trigger") or ""),
     )
 
 
@@ -122,11 +165,10 @@ def evaluate_hypothesis(
 ) -> HypothesisDecision:
     if market.xau.code != spec.asset:
         return HypothesisDecision("FLAT", 0, missing=[f"snapshot is {market.xau.code}, hypothesis wants {spec.asset}"])
-    impact = apply_transmission(news.text, spec.family) if news else None
-    direction = 0 if impact is None else impact.direction
+    direction, why = resolve_direction(spec, news.text if news else "")
     decision = HypothesisDecision("FLAT", direction)
-    if direction == 0:
-        decision.reasons.append("news has no direction for this asset")
+    if why:
+        decision.reasons.append(why)
         return decision
     values = _factor_values(spec, market, news, now)
     for condition in spec.confirmations:
@@ -140,9 +182,12 @@ def evaluate_hypothesis(
             return decision
     if spec.entry == "FOLLOW_NEWS":
         decision.side = "LONG" if direction > 0 else "SHORT"
-        decision.reasons.append("confirmations passed")
+    elif spec.entry in ("LONG", "SHORT"):
+        decision.side = spec.entry
+    else:
+        decision.reasons.append(f"unsupported entry {spec.entry}")
         return decision
-    decision.reasons.append(f"unsupported entry {spec.entry}")
+    decision.reasons.append(f"{len(spec.confirmations)}/{len(spec.confirmations)} confirmations passed")
     return decision
 
 

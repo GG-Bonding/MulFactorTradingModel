@@ -6,7 +6,7 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from gold_signal.hypothesis import HypothesisSpec, _check
+from gold_signal.hypothesis import HypothesisSpec, _check, resolve_direction
 from gold_signal.models import Bar
 from gold_signal.news import CLASSIFIER_VERSION
 from gold_signal.observation import EventRecord, FactorResolver, Observation
@@ -18,7 +18,6 @@ from gold_signal.replay_clock import (
     measure_outcome,
     reaction_1m,
 )
-from gold_signal.transmission import apply_transmission
 
 HORIZONS: tuple[tuple[str, timedelta], ...] = (
     ("1m", timedelta(minutes=1)),
@@ -43,6 +42,18 @@ def price_factor(code: str) -> str:
 
 def series_code(factor: str) -> str:
     return factor.split(".", 1)[0]
+
+
+def confirmation_value(
+    factor: str,
+    resolver: FactorResolver,
+    published_at: datetime,
+    now: datetime,
+) -> float | None:
+    """Only a print that is already knowable can confirm. Unsafe factors stay empty."""
+    if factor.endswith(".reaction_1m"):
+        return reaction_1m(resolver, price_factor(series_code(factor)), published_at, now)
+    return None
 
 
 def observations_from_bars(
@@ -95,15 +106,12 @@ def decide_at(
     if now < event.available_at or now < ready_at:
         return DecisionRecord(side="WAITING", reasons=("reaction minute has not arrived",), **blank)
     text = _event_text(event)
-    impact = apply_transmission(text, spec.family)
-    direction = 0 if impact is None else impact.direction
-    if direction == 0:
-        return DecisionRecord(side="FLAT", reasons=("news has no direction for this asset",), **blank)
+    direction, why = resolve_direction(spec, text)
+    if why or direction == 0:
+        return DecisionRecord(side="FLAT", reasons=(why or "news has no direction for this asset",), **blank)
     values: dict[str, float | None] = {}
     for condition in spec.confirmations:
-        if not condition.factor.endswith(".reaction_1m"):
-            return DecisionRecord(side="FLAT", reasons=(f"missing {condition.factor}",), **blank)
-        change = reaction_1m(resolver, price_factor(series_code(condition.factor)), event.published_at, now)
+        change = confirmation_value(condition.factor, resolver, event.published_at, now)
         if change is None:
             return DecisionRecord(side="WAITING", reasons=(f"{condition.factor} is waiting",), **blank)
         values[condition.factor] = change
@@ -117,9 +125,12 @@ def decide_at(
                 reasons=(f"failed {condition.factor} {condition.operator}",),
                 **blank,
             )
-    if spec.entry != "FOLLOW_NEWS":
+    if spec.entry in ("LONG", "SHORT"):
+        side = spec.entry
+    elif spec.entry == "FOLLOW_NEWS":
+        side = "LONG" if direction > 0 else "SHORT"
+    else:
         return DecisionRecord(side="FLAT", reasons=(f"unsupported entry {spec.entry}",), **blank)
-    side = "LONG" if direction > 0 else "SHORT"
     entry = resolver.price_at(price_factor(spec.asset), now, now)
     entry_at, entry_price = fill_price(
         side,
@@ -131,7 +142,7 @@ def decide_at(
         return DecisionRecord(side="WAITING", reasons=("entry print is not knowable yet",), **blank)
     return DecisionRecord(
         side=side,
-        reasons=("confirmations passed",),
+        reasons=(f"{len(spec.confirmations)}/{len(spec.confirmations)} confirmations passed",),
         entry_at=entry_at,
         entry_price=entry_price,
         event_id=event.event_id,
