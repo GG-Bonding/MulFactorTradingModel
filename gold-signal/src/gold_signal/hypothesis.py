@@ -6,6 +6,7 @@ from pathlib import Path
 
 from gold_signal.market import event_reaction
 from gold_signal.models import FlashNews, MarketSnapshot
+from gold_signal.replay_clock import CostModel
 from gold_signal.transmission import apply_transmission
 
 REQUIRED_HISTORY = (
@@ -145,24 +146,61 @@ def evaluate_hypothesis(
     return decision
 
 
-def historical_validation(spec: HypothesisSpec, start: str, end: str) -> dict:
-    """News-driven history is not stored. Do not invent samples for the range."""
-    missing = [f"{spec.asset}: {reason}" for _key, reason in REQUIRED_HISTORY]
-    for condition in spec.confirmations:
-        if condition.factor.startswith("DFII10"):
-            missing.append("DFII10 is a daily FRED print and is not safe to use before its observation date")
-        elif condition.factor not in {item[0] for item in REQUIRED_HISTORY}:
-            missing.append(f"{condition.factor}: no historical series aligned to headlines")
-    return {
-        "hypothesis": spec.id,
-        "start": start,
-        "end": end,
-        "status": "INSUFFICIENT",
-        "samples": 0,
-        "win_rate": None,
-        "avg_return": None,
-        "missing": missing,
-    }
+def historical_validation(
+    spec: HypothesisSpec,
+    start: str,
+    end: str,
+    *,
+    strategy_path: Path | None = None,
+    observations: list | None = None,
+    events: list | None = None,
+    costs: CostModel | None = None,
+) -> dict:
+    """Replay a point-in-time archive. With no archive, report the gap and invent nothing."""
+    if observations is None or events is None:
+        from gold_signal.research import RESEARCH_WINDOWS, yaml_sha256
+
+        missing = [f"{spec.asset}: {reason}" for _key, reason in REQUIRED_HISTORY]
+        for condition in spec.confirmations:
+            if condition.factor.startswith("DFII10"):
+                missing.append("DFII10 is a daily FRED print and is not safe to use before its observation date")
+            elif condition.factor not in {item[0] for item in REQUIRED_HISTORY}:
+                missing.append(f"{condition.factor}: no historical series aligned to headlines")
+        return {
+            "hypothesis": spec.id,
+            "yaml_sha256": yaml_sha256(strategy_path),
+            "start": start,
+            "end": end,
+            "status": "INSUFFICIENT",
+            "samples": 0,
+            "win_rate": None,
+            "avg_return": None,
+            "missing": missing,
+            "windows": {
+                name: {
+                    "start": window_start,
+                    "end": window_end,
+                    "status": "INSUFFICIENT",
+                    "samples": 0,
+                    "expectancy": None,
+                    "median_return": None,
+                    "profit_factor": None,
+                    "avg_return": None,
+                }
+                for name, window_start, window_end in RESEARCH_WINDOWS
+            },
+        }
+    from gold_signal.research import replay_report
+
+    return replay_report(
+        spec,
+        start,
+        end,
+        events,
+        observations,
+        strategy_path=strategy_path,
+        costs=costs,
+    )
 
 
 def _factor_values(

@@ -90,6 +90,61 @@ class Recorder:
             handle.write(json.dumps(record, ensure_ascii=False, default=_json_default) + "\n")
 
 
+def record_live_tick(
+    recorder: Recorder,
+    market: object,
+    news: object | None,
+    *,
+    event_type: str,
+    classifier_version: str,
+    ingested_at: datetime,
+    source: str = "live",
+    seen: set[str] | None = None,
+) -> None:
+    """Persist every close already on the snapshot, and the event body for later reclassification."""
+    seen = seen if seen is not None else set()
+    for asset in (market.xau, market.xag, market.eurusd):
+        code = getattr(asset, "code", "")
+        if not code or code == "FLAT":
+            continue
+        factor = f"market.{code}.close"
+        if factor in seen:
+            continue
+        seen.add(factor)
+        recorder.append(
+            "observation",
+            {
+                "factor": factor,
+                "value": asset.price,
+                "observed_at": market.as_of,
+                "available_at": market.as_of,
+                "ingested_at": ingested_at,
+                "source": source,
+                "symbol": code,
+            },
+        )
+    if news is None:
+        return
+    event_key = f"event:{news.event_id}"
+    if event_key in seen:
+        return
+    seen.add(event_key)
+    recorder.append(
+        "event",
+        {
+            "event_id": news.event_id,
+            "published_at": news.published_at,
+            "available_at": news.published_at,
+            "ingested_at": ingested_at,
+            "title": news.title,
+            "content": news.content,
+            "event_type": event_type,
+            "classifier_version": classifier_version,
+            "source": "jin10",
+        },
+    )
+
+
 def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()

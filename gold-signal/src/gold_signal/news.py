@@ -6,6 +6,8 @@ from datetime import datetime
 from gold_signal.jin10 import make_event_id
 from gold_signal.models import FlashNews, NewsImpact, Thresholds
 
+CLASSIFIER_VERSION = "rules-v0"
+
 RELEVANT_KEYWORDS = (
     "CPI",
     "PCE",

@@ -165,7 +165,9 @@ def parse_yahoo_minutes(payload: dict, code: str) -> list[Bar]:
     for ts, close in zip(stamps, closes):
         if close is None or ts is None:
             continue
-        bars.append(Bar(ts=datetime.fromtimestamp(int(ts), tz=timezone.utc), close=float(close)))
+        # Yahoo stamps the bar open. The close is knowable one minute later.
+        opened = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        bars.append(Bar(ts=opened + timedelta(minutes=1), close=float(close)))
     bars.sort(key=lambda bar: bar.ts)
     return bars
 

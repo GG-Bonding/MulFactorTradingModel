@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from gold_signal.market import event_reaction
+from gold_signal.replay_clock import fill_price
 from gold_signal.models import (
     EventReaction,
     FlashNews,
@@ -111,6 +112,9 @@ class SignalEngine:
         )
         strength = compute_strength(total, impact, weight, post_1m)
         anchor = None if primary is None else primary.anchor_price
+        ready_at = news.published_at + timedelta(minutes=1) if news else now
+        trade_side = "LONG" if signal == SignalSide.BUY else "SHORT" if signal == SignalSide.SELL else "FLAT"
+        _filled_at, entry_px = fill_price(trade_side, market.xau.price, now, ready_at)
 
         return SignalResult(
             timestamp=now,
@@ -122,7 +126,7 @@ class SignalEngine:
             news_impact_label=impact.label,
             event_id=event_id,
             product=market.xau.code,
-            xau_price=anchor if anchor is not None else market.xau.price,
+            xau_price=market.xau.price,
             xau_1m=0.0 if post_1m is None else post_1m,
             xau_3m=0.0 if post_3m is None else post_3m,
             xag_1m=0.0 if confirm_1m is None else confirm_1m,
@@ -138,7 +142,7 @@ class SignalEngine:
             reason=reason,
             is_primary=is_primary,
             rejected_by_market=rejected,
-            entry=anchor if signal in (SignalSide.BUY, SignalSide.SELL) else None,
+            entry=entry_px,
         )
 
     def _decide(

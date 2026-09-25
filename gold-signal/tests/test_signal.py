@@ -139,6 +139,21 @@ def test_classify_used_by_engine():
     assert classify_news("美国8月非农就业人数低于预期").direction == 1
 
 
+def test_entry_is_the_price_at_the_decision_not_the_news_anchor():
+    now = datetime(2026, 9, 13, 14, 35, 12, tzinfo=timezone.utc)
+    market = _market(
+        now,
+        _quiet_then(3600.0, [3600.0, 3604.0, 3608.0, 3614.0]),
+        _quiet_then(42.0, [42.00, 42.04, 42.08, 42.16]),
+        _quiet_then(1.10, [1.1000, 1.1010, 1.1020, 1.1040]),
+    )
+    result = SignalEngine().evaluate(_news("美国8月非农就业人数低于预期", now), market, now)
+    assert result.signal == SignalSide.BUY
+    assert result.anchor_price is not None
+    assert result.entry == market.xau.price
+    assert result.entry != result.anchor_price
+
+
 def test_rally_before_the_news_is_not_confirmation():
     now = datetime(2026, 9, 13, 14, 35, 12, tzinfo=timezone.utc)
     market = _market(

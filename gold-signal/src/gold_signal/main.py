@@ -18,7 +18,9 @@ from rich.text import Text
 from gold_signal.europe import append_europe, classify_europe, fetch_europe_snapshot
 from gold_signal.fred import as_record, fetch_us_real_yield_10y
 from gold_signal.hypothesis import evaluate_hypothesis, historical_validation, load_hypothesis
-from gold_signal.observation import Recorder
+from gold_signal.observation import Recorder, record_live_tick
+from gold_signal.replay_clock import measure_outcome
+from gold_signal.research import load_archive
 from gold_signal.tape import GROUP_LABELS, GROUP_ORDER, fetch_tape
 from gold_signal.jin10 import SHANGHAI, Jin10Client, Jin10Error, parse_time
 from gold_signal.market import fetch_binance_bars, fetch_binance_price, snapshot
@@ -33,7 +35,7 @@ from gold_signal.models import (
     SignalSide,
     Thresholds,
 )
-from gold_signal.news import classify_btc_news, classify_gold_news, news_age_seconds, news_weight
+from gold_signal.news import CLASSIFIER_VERSION, classify_btc_news, classify_gold_news, news_age_seconds, news_weight
 from gold_signal.polymarket import PolymarketFeed
 from gold_signal.products import SIGNAL_PRODUCTS, fetch_signal_board, impact_for_product, pick_product_news
 from gold_signal.signal import EventLog, SignalEngine, SignalStore
@@ -194,35 +196,21 @@ def run_live(
                 result = engine.evaluate(news, market, now=now, impact=impact)
                 store.append(result)
                 EventLog(EVENTS_PATH).upsert(result)
-                Recorder(HISTORY_PATH).append(
-                    "observation",
-                    {
-                        "factor": f"market.{market.xau.code}.close",
-                        "value": market.xau.price,
-                        "observed_at": market.as_of,
-                        "available_at": market.as_of,
-                        "ingested_at": datetime.now(tz=SHANGHAI),
-                        "source": "live",
-                    },
+                record_live_tick(
+                    Recorder(HISTORY_PATH),
+                    market,
+                    news,
+                    event_type=_event_type(news, impact),
+                    classifier_version=CLASSIFIER_VERSION,
+                    ingested_at=datetime.now(tz=SHANGHAI),
                 )
-                if news is not None:
-                    Recorder(HISTORY_PATH).append(
-                        "event",
-                        {
-                            "event_id": news.event_id,
-                            "published_at": news.published_at,
-                            "available_at": news.published_at,
-                            "ingested_at": datetime.now(tz=SHANGHAI),
-                            "title": news.title,
-                            "source": "jin10",
-                        },
-                    )
-                if result.signal in (SignalSide.BUY, SignalSide.SELL) and result.is_primary:
+                if result.signal in (SignalSide.BUY, SignalSide.SELL) and result.is_primary and result.entry is not None:
                     pending.append(
                         {
                             "event_id": result.event_id,
                             "timestamp": result.timestamp.isoformat(),
-                            "entry": result.xau_price,
+                            "entry": result.entry,
+                            "side": "LONG" if result.signal == SignalSide.BUY else "SHORT",
                             "t0": result.timestamp,
                         }
                     )
@@ -281,12 +269,23 @@ def _run_all_products(
             CONSOLE.print(f"[yellow]{note}[/yellow]")
         now = datetime.now(tz=SHANGHAI)
         CONSOLE.rule(f"product signals {now.strftime('%H:%M:%S')}")
+        recorded: set[str] = set()
+        ingested_at = datetime.now(tz=SHANGHAI)
         for spec, market in markets:
             news = pick_product_news(news_list, now, spec.family)
             impact = impact_for_product(news.text, spec.family) if news else None
             result = engine.evaluate(news, market, now=now, impact=impact)
             store.append(result)
             EventLog(EVENTS_PATH).upsert(result)
+            record_live_tick(
+                Recorder(HISTORY_PATH),
+                market,
+                news,
+                event_type=_event_type(news, impact),
+                classifier_version=CLASSIFIER_VERSION,
+                ingested_at=ingested_at,
+                seen=recorded,
+            )
             CONSOLE.print(render_signal_card(result, market))
         if not markets:
             CONSOLE.print("[yellow]no product had 1m bars[/yellow]")
@@ -363,12 +362,60 @@ def run_hypothesis(strategy: Path) -> int:
 
 def run_backtest(strategy: Path, start: str, end: str) -> int:
     spec = load_hypothesis(strategy)
-    report = historical_validation(spec, start, end)
+    archive = ROOT / "data" / "history" / "archive.jsonl"
+    observations = None
+    events = None
+    if archive.exists():
+        events, observations = load_archive(archive)
+    report = historical_validation(
+        spec,
+        start,
+        end,
+        strategy_path=strategy,
+        observations=observations,
+        events=events,
+    )
     CONSOLE.print(f"{report['hypothesis']} {report['start']} → {report['end']}")
+    if report.get("yaml_sha256"):
+        CONSOLE.print(f"yaml={report['yaml_sha256']}")
     CONSOLE.print(f"status={report['status']} samples={report['samples']}")
+    counts = report.get("counts") or {}
+    if counts:
+        CONSOLE.print(
+            f"events={counts.get('events', 0)} long={counts.get('long', 0)} "
+            f"short={counts.get('short', 0)} flat={counts.get('flat', 0)} waiting={counts.get('waiting', 0)}"
+        )
+    net = report.get("net") or {}
+    if net:
+        CONSOLE.print(
+            f"horizon={report.get('horizon')} net_avg={_fmt_stat(net.get('avg_return'))} "
+            f"median={_fmt_stat(net.get('median_return'))} "
+            f"p25={_fmt_stat(net.get('p25'))} p75={_fmt_stat(net.get('p75'))} "
+            f"ev={_fmt_stat(net.get('expectancy'))} pf={_fmt_stat(net.get('profit_factor'))}"
+        )
+    for name, window in (report.get("windows") or {}).items():
+        CONSOLE.print(
+            f"{name} {window['start']} → {window['end']} status={window['status']} "
+            f"samples={window['samples']} ev={_fmt_stat(window.get('expectancy'))}"
+        )
     for item in report["missing"]:
         CONSOLE.print(f"missing: {item}")
+    if not archive.exists():
+        CONSOLE.print(f"archive missing: {archive}")
     return 0
+
+
+def _event_type(news: FlashNews | None, impact: object | None) -> str:
+    if news is None:
+        return ""
+    label = getattr(impact, "label", None)
+    if label:
+        return str(label)
+    return classify_gold_news(news.text).label
+
+
+def _fmt_stat(value: float | None) -> str:
+    return "INSUFFICIENT" if value is None else f"{value:+.4%}"
 
 
 def run_yield() -> int:
@@ -570,7 +617,14 @@ def update_pending_returns(
     for item in pending:
         entry = float(item["entry"])
         elapsed = (now - item["t0"]).total_seconds()
-        ret = price / entry - 1 if entry else None
+        measured = measure_outcome(
+            side=str(item.get("side") or "LONG"),
+            entry_price=entry,
+            entry_at=item["t0"],
+            path=[(now, price)],
+            exit_price=price,
+        )
+        ret = measured.return_from_entry
         kwargs: dict[str, float] = {}
         if elapsed >= 60 and "done_1m" not in item:
             kwargs["return_1m"] = ret

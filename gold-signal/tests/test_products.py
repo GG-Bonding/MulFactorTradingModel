@@ -100,6 +100,8 @@ def test_same_headline_can_signal_two_products():
 
 
 def test_yahoo_minute_parser_skips_null_closes():
+    from datetime import datetime, timedelta, timezone
+
     bars = parse_yahoo_minutes(
         {
             "chart": {
@@ -114,3 +116,5 @@ def test_yahoo_minute_parser_skips_null_closes():
         "NQ=F",
     )
     assert [bar.close for bar in bars] == [100.0, 101.0]
+    assert bars[0].ts == datetime.fromtimestamp(1_700_000_000, tz=timezone.utc) + timedelta(minutes=1)
+    assert bars[1].ts == datetime.fromtimestamp(1_700_000_120, tz=timezone.utc) + timedelta(minutes=1)
