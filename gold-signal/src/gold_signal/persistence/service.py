@@ -54,7 +54,14 @@ def add_hypothesis_version(store: ProductStore, agent_id: str, yaml: str, *, now
     return version
 
 
-def run_backtest(store: ProductStore, agent_id: str, *, now: datetime | None = None) -> dict:
+def run_backtest(
+    store: ProductStore,
+    agent_id: str,
+    *,
+    now: datetime | None = None,
+    events: list | None = None,
+    observations: list | None = None,
+) -> dict:
     agent = _require_agent(store, agent_id)
     if agent.active_version_id is None:
         raise ValueError("agent has no version")
@@ -64,7 +71,12 @@ def run_backtest(store: ProductStore, agent_id: str, *, now: datetime | None = N
     stamp = now or _now()
     store.insert_activity(uuid.uuid4().hex, agent.id, "BACKTEST_STARTED", {"version_id": version.id}, stamp)
     spec = parse_hypothesis(version.hypothesis_yaml)
-    report = historical_validation(spec, "2024-01-01", "2026-09-30", strategy_path=None)
+    if events is not None and observations is not None:
+        from gold_signal.research import replay_report
+
+        report = replay_report(spec, "2024-01-01", "2026-09-30", events, observations)
+    else:
+        report = historical_validation(spec, "2024-01-01", "2026-09-30", strategy_path=None)
     run_id = uuid.uuid4().hex
     store.insert_backtest(run_id, agent.id, version.id, report, stamp)
     if agent.status == AgentStatus.DRAFT and report.get("status") == "OK":

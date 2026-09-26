@@ -194,6 +194,10 @@ class ProductStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_signal(self, signal_id: str) -> dict | None:
+        row = self._conn.execute("SELECT * FROM signals WHERE id = ?", (signal_id,)).fetchone()
+        return None if row is None else dict(row)
+
     def insert_paper_trade(self, trade: dict) -> None:
         self._conn.execute(
             """
@@ -222,6 +226,19 @@ class ProductStore:
             (agent_id,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_open_paper_trades(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM paper_trades WHERE net_return IS NULL ORDER BY created_at, id"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_paper_outcome(self, trade_id: str, net_return: float) -> None:
+        self._conn.execute(
+            "UPDATE paper_trades SET net_return = ?, status = ? WHERE id = ? AND net_return IS NULL",
+            (net_return, "SETTLED", trade_id),
+        )
+        self._conn.commit()
 
     def insert_activity(self, activity_id: str, agent_id: str, kind: str, detail: dict, now: datetime) -> None:
         self._conn.execute(

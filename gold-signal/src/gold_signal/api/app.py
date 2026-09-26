@@ -16,6 +16,8 @@ from gold_signal.persistence.service import (
     run_backtest,
 )
 from gold_signal.persistence.store import ProductStore, VersionImmutable
+from gold_signal.observation import EventRecord, Observation
+from gold_signal.runtime.agent_loop import AgentRuntime
 
 
 class IdeaIn(BaseModel):
@@ -29,6 +31,26 @@ class VersionIn(BaseModel):
 class AgentUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+
+
+class ObservationIn(BaseModel):
+    factor: str
+    value: float
+    observed_at: datetime
+
+
+class EventIn(BaseModel):
+    event_id: str
+    title: str
+    content: str
+    published_at: datetime
+    available_at: datetime | None = None
+
+
+class TickIn(BaseModel):
+    now: datetime
+    observations: list[ObservationIn]
+    event: EventIn | None = None
 
 
 def create_app(store: ProductStore) -> FastAPI:
@@ -172,6 +194,35 @@ def create_app(store: ProductStore) -> FastAPI:
             "paper_avg_net": paper_avg,
             "missing": [] if latest is None else latest.get("missing") or [],
         }
+
+    @app.post("/api/runtime/ticks")
+    def tick(body: TickIn) -> dict:
+        observations = [
+            Observation(
+                item.factor,
+                item.value,
+                item.observed_at,
+                item.observed_at,
+                item.observed_at,
+                "runtime",
+                item.factor.split(".")[1] if "." in item.factor else None,
+            )
+            for item in body.observations
+        ]
+        event = None
+        if body.event is not None:
+            event = EventRecord(
+                event_id=body.event.event_id,
+                event_type="",
+                published_at=body.event.published_at,
+                available_at=body.event.available_at or body.event.published_at,
+                ingested_at=body.now,
+                title=body.event.title,
+                content=body.event.content,
+                source="runtime",
+            )
+        result = AgentRuntime().tick(store, now=body.now, observations=observations, event=event)
+        return {"signals": len(result["signals"]), "settled": result["settled"]}
 
     return app
 
