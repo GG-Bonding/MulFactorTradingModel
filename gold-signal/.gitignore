@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .env
 data/*.jsonl
+data/*.sqlite
 .DS_Store
 *.egg-info/
 dist/

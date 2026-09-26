@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block body %}
+<p><a href="/agents">Agents</a></p>
+<h1>{{ agent.name }}</h1>
+<p class="status">{{ agent.status.value }} · {{ current_side }}</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<p>{{ agent.description }}</p>
+
+{% if spec %}
+<h2>Conditions</h2>
+<ul>
+  <li>Trigger {{ spec.trigger }}</li>
+  {% for item in spec.confirmations %}
+  <li>{{ item.factor }} {{ item.operator }} {% if item.value is not none %}{{ item.value }}{% endif %}</li>
+  {% endfor %}
+</ul>
+<p>Entry {{ spec.entry }} {{ spec.asset }} · Horizons {{ spec.horizons | join(", ") }}</p>
+{% endif %}
+
+<p>
+  {% if agent.status.value == "DRAFT" %}
+  <form class="inline" method="post" action="/agents/{{ agent.id }}/backtest"><button type="submit">Run Backtest</button></form>
+  {% endif %}
+  {% if agent.status.value == "BACKTESTED" %}
+  <form class="inline" method="post" action="/agents/{{ agent.id }}/deploy-paper"><button type="submit">Deploy Paper</button></form>
+  {% endif %}
+  {% if agent.status.value == "PAPER" %}
+  <form class="inline" method="post" action="/agents/{{ agent.id }}/pause"><button class="secondary" type="submit">Pause</button></form>
+  {% endif %}
+  <a href="/agents/{{ agent.id }}/activity">Activity</a>
+</p>
+
+<h2>Historical</h2>
+{% if report and report.status == "OK" %}
+<p>Samples {{ report.samples }} · Win rate {{ pct(report.net.win_rate) }} · Avg {{ pct(report.net.avg_return) }} · Median {{ pct(report.net.median_return) }}</p>
+<p>Profit factor {{ report.net.profit_factor if report.net.profit_factor is not none else "—" }} · MFE {{ pct(report.net.avg_mfe) }} · MAE {{ pct(report.net.avg_mae) }}</p>
+{% if latest %}<p><a href="/agents/{{ agent.id }}/backtests/{{ latest.id }}">Backtest detail</a></p>{% endif %}
+{% elif report %}
+<p class="error">Historical backtest cannot run.</p>
+<ul>{% for item in report.missing %}<li>{{ item }}</li>{% endfor %}</ul>
+{% if latest %}<p><a href="/agents/{{ agent.id }}/backtests/{{ latest.id }}">Backtest detail</a></p>{% endif %}
+{% else %}
+<p>还没有回测。</p>
+{% endif %}
+
+<h2>Out-of-Sample</h2>
+{% if windows %}
+<table>
+  <thead><tr><th>Window</th><th>Status</th><th>Samples</th><th>Avg net</th></tr></thead>
+  <tbody>
+  {% for window in windows %}
+  <tr>
+    <td>{{ window.name }}</td>
+    <td>{{ window.status }}</td>
+    <td>{% if window.status == "INSUFFICIENT" %}—{% else %}{{ window.samples }}{% endif %}</td>
+    <td>{% if window.status == "INSUFFICIENT" %}—{% else %}{{ pct(window.avg_return) }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>—</p>
+{% endif %}
+
+<h2>Paper</h2>
+{% if trades %}
+<table>
+  <thead><tr><th>Version</th><th>Side</th><th>Entry</th><th>Net</th></tr></thead>
+  <tbody>
+  {% for trade in trades %}
+  <tr>
+    <td>{{ trade.version_id }}</td>
+    <td>{{ trade.side }}</td>
+    <td>{{ trade.entry_price }}</td>
+    <td>{{ pct(trade.net_return) }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>还没有模拟成交。</p>
+{% endif %}
+
+{% if current_reason %}
+<h2>Current signal</h2>
+<p>{{ current_side }} · {{ current_reason }}</p>
+{% endif %}
+
+<h2>Recent signals</h2>
+{% if signals %}
+<ul>{% for signal in signals %}<li>{{ signal.side }} {{ signal.entry_price }} · {{ signal.reason }}</li>{% endfor %}</ul>
+{% else %}<p>—</p>{% endif %}
+
+<h2>Versions</h2>
+<ul>
+{% for item in versions %}
+  <li>v{{ item.version }} {% if item.id == agent.active_version_id %}active{% endif %} {{ item.hypothesis_sha256[:12] }}</li>
+{% endfor %}
+</ul>
+<form method="post" action="/agents/{{ agent.id }}/versions">
+  <label>确认阈值 (%) <input type="number" name="threshold_percent" step="0.01" value="0.12" required></label>
+  <button class="secondary" type="submit">Save as new version</button>
+</form>
+
+{% if agent.status.value == "PAPER" %}
+<h2>Incoming event</h2>
+<form method="post" action="/agents/{{ agent.id }}/ticks">
+  <p><label>Headline <input type="text" name="headline" value="{{ headline }}"></label></p>
+  <input type="hidden" name="published_at" value="{{ published_at }}">
+  <p>
+    <button class="secondary" name="stage" value="arrived" type="submit">News arrived</button>
+    <button class="secondary" name="stage" value="minute" type="submit">One minute later</button>
+    <button name="stage" value="settle" type="submit">Five minutes after entry</button>
+  </p>
+</form>
+{% endif %}
+{% endblock %}

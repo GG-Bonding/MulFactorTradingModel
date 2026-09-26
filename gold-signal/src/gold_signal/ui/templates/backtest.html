@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block body %}
+<p><a href="/agents/{{ agent.id }}">{{ agent.name }}</a></p>
+<h1>Backtest</h1>
+<p class="status">{{ run.status }}</p>
+{% if report.status != "OK" %}
+<p class="error">Historical backtest cannot run.</p>
+<ul>{% for item in report.missing %}<li>{{ item }}</li>{% endfor %}</ul>
+{% else %}
+<h2>Historical</h2>
+<table>
+  <tbody>
+    <tr><th>Samples</th><td>{{ report.samples }}</td></tr>
+    <tr><th>Win rate</th><td>{{ pct(report.net.win_rate) }}</td></tr>
+    <tr><th>Avg net</th><td>{{ pct(report.net.avg_return) }}</td></tr>
+    <tr><th>Median</th><td>{{ pct(report.net.median_return) }}</td></tr>
+    <tr><th>Profit factor</th><td>{{ report.net.profit_factor if report.net.profit_factor is not none else "—" }}</td></tr>
+    <tr><th>MFE</th><td>{{ pct(report.net.avg_mfe) }}</td></tr>
+    <tr><th>MAE</th><td>{{ pct(report.net.avg_mae) }}</td></tr>
+  </tbody>
+</table>
+{% endif %}
+<h2>Train / Validation / OOS</h2>
+<table>
+  <thead><tr><th>Window</th><th>Status</th><th>Samples</th><th>Avg net</th></tr></thead>
+  <tbody>
+  {% for window in windows %}
+  <tr>
+    <td>{{ window.name }}</td>
+    <td>{{ window.status or "—" }}</td>
+    <td>{% if window.status == "INSUFFICIENT" %}—{% else %}{{ window.samples if window.samples is not none else "—" }}{% endif %}</td>
+    <td>{% if window.status == "INSUFFICIENT" %}—{% else %}{{ pct(window.avg_return) }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

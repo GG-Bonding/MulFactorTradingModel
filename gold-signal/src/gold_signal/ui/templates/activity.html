@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block body %}
+<p><a href="/agents/{{ agent.id }}">{{ agent.name }}</a></p>
+<h1>Activity</h1>
+{% if not activities %}
+<p>还没有活动。</p>
+{% else %}
+<table>
+  <thead><tr><th>When</th><th>Kind</th><th>Detail</th></tr></thead>
+  <tbody>
+  {% for item in activities %}
+  <tr>
+    <td>{{ item.created_at }}</td>
+    <td>{{ item.kind }}</td>
+    <td><pre>{{ item.detail }}</pre></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

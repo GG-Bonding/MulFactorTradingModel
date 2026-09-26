@@ -224,6 +224,9 @@ def create_app(store: ProductStore) -> FastAPI:
         result = AgentRuntime().tick(store, now=body.now, observations=observations, event=event)
         return {"signals": len(result["signals"]), "settled": result["settled"]}
 
+    from gold_signal.ui.pages import mount_ui
+
+    mount_ui(app)
     return app
 
 

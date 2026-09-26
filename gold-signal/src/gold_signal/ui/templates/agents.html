@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Trading Agents</h1>
+{% if not rows %}
+<p>还没有 Agent。从一句话开始。</p>
+{% else %}
+<table>
+  <thead><tr><th>Agent</th><th>Status</th><th>Side</th><th>Paper</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td><a href="/agents/{{ row.agent.id }}">{{ row.agent.name }}</a></td>
+      <td class="status">{{ row.agent.status.value }}</td>
+      <td>{{ row.side }}</td>
+      <td>{{ pct(row.paper) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

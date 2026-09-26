@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Describe your trading idea</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/agents/new">
+  <textarea name="idea" rows="6" required>{{ idea }}</textarea>
+  <p>
+    <button class="secondary" name="action" value="preview" type="submit">Preview</button>
+    <button name="action" value="create" type="submit">Create Agent</button>
+  </p>
+</form>
+{% if spec %}
+<div class="grid">
+  <section>
+    <h2>Trigger</h2>
+    <p>{{ spec.trigger }}</p>
+    <h2>Entry</h2>
+    <p>{{ spec.entry }} {{ spec.asset }}</p>
+  </section>
+  <section>
+    <h2>Conditions</h2>
+    <ul>
+    {% for item in spec.confirmations %}
+      <li>{{ item.factor }} {{ item.operator }} {% if item.value is not none %}{{ item.value }}{% endif %}</li>
+    {% endfor %}
+    </ul>
+    <h2>Horizons</h2>
+    <p>{{ spec.horizons | join(", ") }}</p>
+  </section>
+</div>
+{% endif %}
+{% endblock %}
