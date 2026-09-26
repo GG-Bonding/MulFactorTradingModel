@@ -172,6 +172,10 @@ def run_live(
     agent_spec = load_hypothesis(strategy) if strategy is not None else None
     last_agent_key: tuple[str, str, str] | None = None
     poly_feed: PolymarketFeed | None = None
+    from gold_signal.ingest import feed_agents
+    from gold_signal.persistence.store import ProductStore
+
+    product_store = ProductStore(ROOT / "data" / "agents.sqlite")
     try:
         init = client.connect()
         CONSOLE.print(f"Jin10 connected. tools={client.tool_names()} book={book}")
@@ -227,6 +231,8 @@ def run_live(
                     classifier_version=CLASSIFIER_VERSION,
                     ingested_at=datetime.now(tz=SHANGHAI),
                 )
+                if book == "gold":
+                    feed_agents(product_store, market, news, now)
                 if agent_spec is not None and news is not None:
                     from gold_signal.agent import format_agent_view, view_from_market
 
@@ -276,6 +282,7 @@ def run_live(
         if poly_feed is not None:
             poly_feed.stop()
         client.close()
+        product_store.close()
     return 0
 
 

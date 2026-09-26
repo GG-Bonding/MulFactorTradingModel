@@ -109,10 +109,13 @@ def replay_event(
 ) -> tuple[DecisionRecord, dict[str, TradeOutcome]]:
     """Decide when the reaction minute exists, then measure forward from that fill."""
     costs = costs or CostModel()
-    resolver = FactorResolver(observations)
     ready_at = event.published_at + timedelta(minutes=1)
-    decision_time = ready_at if ready_at >= event.available_at else event.available_at
-    decision = decide_at(spec, event, resolver, decision_time)
+    if event.available_at > ready_at:
+        ready_at = event.available_at
+    later = [row.observed_at for row in observations if row.observed_at >= ready_at]
+    decision_time = min(later) if later else ready_at
+    decision = decide_at(spec, event, FactorResolver(observations), decision_time)
+    resolver = FactorResolver(observations)
     outcomes: dict[str, TradeOutcome] = {}
     if decision.side in ("LONG", "SHORT") and decision.entry_price is not None and decision.entry_at is not None:
         for name, delta in HORIZONS:
@@ -248,8 +251,12 @@ def _outcome_at_horizon(
     assert decision.entry_at is not None and decision.entry_price is not None
     exit_at = decision.entry_at + delta
     series = price_factor(asset)
-    last = resolver.price_at(series, exit_at, exit_at)
-    if last is None or last.observed_at < exit_at:
+    later = [
+        row
+        for row in resolver.observations
+        if row.factor == series and row.observed_at >= exit_at
+    ]
+    if not later:
         return measure_outcome(
             side=decision.side,
             entry_price=decision.entry_price,
@@ -259,10 +266,11 @@ def _outcome_at_horizon(
             costs=costs,
             horizon=horizon,
         )
+    last = min(later, key=lambda row: row.observed_at)
     path = [
         (row.observed_at, row.value)
-        for row in resolver.visible(series, exit_at)
-        if decision.entry_at < row.observed_at <= last.observed_at
+        for row in resolver.observations
+        if row.factor == series and decision.entry_at < row.observed_at <= last.observed_at
     ]
     return measure_outcome(
         side=decision.side,

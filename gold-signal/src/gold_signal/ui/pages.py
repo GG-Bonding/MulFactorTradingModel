@@ -191,7 +191,11 @@ def mount_ui(app: FastAPI) -> None:
 def _detail_context(store, agent, error: str | None) -> dict:
     version = store.get_version(agent.active_version_id) if agent.active_version_id else None
     spec = parse_hypothesis(version.hypothesis_yaml) if version else None
-    runs = store.list_backtests(agent.id)
+    runs = [
+        row
+        for row in store.list_backtests(agent.id)
+        if agent.active_version_id is None or row["version_id"] == agent.active_version_id
+    ]
     latest = runs[-1] if runs else None
     report = latest["report"] if latest else None
     signals = store.list_signals(agent.id)

@@ -118,12 +118,13 @@ def measure_outcome(
 
 
 def reaction_1m(resolver: FactorResolver, factor: str, published_at: datetime, now: datetime) -> float | None:
+    """First close knowable at or after the one-minute mark, never a print from before it."""
     anchor = resolver.price_at(factor, published_at, now)
-    later = resolver.price_at(factor, published_at + timedelta(minutes=1), now)
-    if anchor is None or later is None or anchor.value == 0:
+    deadline = published_at + timedelta(minutes=1)
+    later_rows = [row for row in resolver.visible(factor, now) if row.observed_at >= deadline]
+    if anchor is None or not later_rows or anchor.value == 0:
         return None
-    if later.observed_at < published_at + timedelta(minutes=1):
-        return None
+    later = later_rows[0]
     return later.value / anchor.value - 1
 
 

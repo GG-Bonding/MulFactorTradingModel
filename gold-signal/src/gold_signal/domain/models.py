@@ -25,10 +25,10 @@ class TransitionError(ValueError):
 
 _ALLOWED: dict[AgentStatus, frozenset[AgentStatus]] = {
     AgentStatus.DRAFT: frozenset({AgentStatus.VALIDATED, AgentStatus.BACKTESTED}),
-    AgentStatus.VALIDATED: frozenset({AgentStatus.BACKTESTED}),
-    AgentStatus.BACKTESTED: frozenset({AgentStatus.PAPER}),
-    AgentStatus.PAPER: frozenset({AgentStatus.PAUSED}),
-    AgentStatus.PAUSED: frozenset({AgentStatus.PAPER}),
+    AgentStatus.VALIDATED: frozenset({AgentStatus.BACKTESTED, AgentStatus.DRAFT}),
+    AgentStatus.BACKTESTED: frozenset({AgentStatus.PAPER, AgentStatus.DRAFT}),
+    AgentStatus.PAPER: frozenset({AgentStatus.PAUSED, AgentStatus.DRAFT}),
+    AgentStatus.PAUSED: frozenset({AgentStatus.PAPER, AgentStatus.DRAFT}),
 }
 
 

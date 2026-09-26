@@ -10,7 +10,8 @@
 <h2>Historical</h2>
 <table>
   <tbody>
-    <tr><th>Samples</th><td>{{ report.samples }}</td></tr>
+    <tr><th>Events</th><td>{{ report.counts.events }}</td></tr>
+    <tr><th>Trades</th><td>{{ report.samples }}</td></tr>
     <tr><th>Win rate</th><td>{{ pct(report.net.win_rate) }}</td></tr>
     <tr><th>Avg net</th><td>{{ pct(report.net.avg_return) }}</td></tr>
     <tr><th>Median</th><td>{{ pct(report.net.median_return) }}</td></tr>

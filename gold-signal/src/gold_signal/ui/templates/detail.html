@@ -32,7 +32,7 @@
 
 <h2>Historical</h2>
 {% if report and report.status == "OK" %}
-<p>Samples {{ report.samples }} · Win rate {{ pct(report.net.win_rate) }} · Avg {{ pct(report.net.avg_return) }} · Median {{ pct(report.net.median_return) }}</p>
+<p>Events {{ report.counts.events }} · Trades {{ report.samples }} · Win rate {{ pct(report.net.win_rate) }} · Avg {{ pct(report.net.avg_return) }} · Median {{ pct(report.net.median_return) }}</p>
 <p>Profit factor {{ report.net.profit_factor if report.net.profit_factor is not none else "—" }} · MFE {{ pct(report.net.avg_mfe) }} · MAE {{ pct(report.net.avg_mae) }}</p>
 {% if latest %}<p><a href="/agents/{{ agent.id }}/backtests/{{ latest.id }}">Backtest detail</a></p>{% endif %}
 {% elif report %}

@@ -44,6 +44,10 @@ def add_hypothesis_version(store: ProductStore, agent_id: str, yaml: str, *, now
     stamp = now or _now()
     version = add_version(agent.id, store.list_versions(agent.id), yaml, stamp)
     store.save_version(version)
+    agent = activate(agent, version, at=stamp)
+    if agent.status != AgentStatus.DRAFT:
+        agent = transition(agent, AgentStatus.DRAFT, at=stamp)
+    store.save_agent(agent)
     store.insert_activity(
         uuid.uuid4().hex,
         agent.id,
@@ -76,7 +80,21 @@ def run_backtest(
 
         report = replay_report(spec, "2024-01-01", "2026-09-30", events, observations)
     else:
-        report = historical_validation(spec, "2024-01-01", "2026-09-30", strategy_path=None)
+        from datetime import datetime, timezone
+
+        from gold_signal.archive import default_archive, factors_for
+        from gold_signal.research import replay_report
+
+        loaded_events, loaded_obs, gaps = default_archive().load(
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 10, 1, tzinfo=timezone.utc),
+            factors_for(spec),
+        )
+        if gaps:
+            report = historical_validation(spec, "2024-01-01", "2026-09-30", strategy_path=None)
+            report["missing"] = list(dict.fromkeys([*report.get("missing", []), *gaps]))
+        else:
+            report = replay_report(spec, "2024-01-01", "2026-09-30", loaded_events, loaded_obs)
     run_id = uuid.uuid4().hex
     store.insert_backtest(run_id, agent.id, version.id, report, stamp)
     if agent.status == AgentStatus.DRAFT and report.get("status") == "OK":

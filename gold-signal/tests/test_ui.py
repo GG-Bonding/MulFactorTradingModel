@@ -26,8 +26,9 @@ def test_pages_walk_compile_backtest_paper_and_keep_v1(tmp_path):
     assert too_soon.status_code == 409
     backtest = client.post(agent_url + "/backtest", follow_redirects=True)
     assert backtest.status_code == 200
-    assert "Historical backtest cannot run." in backtest.text
-    assert "news archive" in backtest.text
+    assert "Historical backtest cannot run." not in backtest.text
+    assert "Events" in backtest.text
+    assert "oos" in backtest.text
     home = client.get(agent_url)
     assert "BACKTESTED" in home.text
     paper = client.post(agent_url + "/deploy-paper", follow_redirects=True)

@@ -26,9 +26,10 @@ def test_restart_keeps_v1_backtest_signal_and_trade(tmp_path):
     store = ProductStore(path)
     agent, version = create_from_idea(store, IDEA, now=_now())
     backtest = run_backtest(store, agent.id, now=_now())
-    assert backtest["status"] == "INSUFFICIENT"
+    assert backtest["status"] == "OK"
     assert backtest["version_id"] == version.id
-    assert any("news archive" in item for item in backtest["report"]["missing"])
+    assert backtest["report"]["counts"]["events"] == 1
+    assert backtest["report"]["windows"]["oos"]["status"] == "OK"
     signal = record_signal(
         store,
         agent.id,
@@ -79,7 +80,8 @@ def test_restart_keeps_v1_backtest_signal_and_trade(tmp_path):
     assert reopened.list_versions(agent.id)[1].id == second.id
     saved = reopened.get_agent(agent.id)
     assert saved is not None
-    assert saved.status.value == "BACKTESTED"
+    assert saved.status.value == "DRAFT"
+    assert saved.active_version_id == second.id
     reopened.close()
 
 
@@ -106,8 +108,8 @@ def test_api_compile_create_backtest_and_keep_v1(tmp_path):
 
     backtest = client.post(f"/api/agents/{agent_id}/backtests")
     assert backtest.status_code == 201
-    assert backtest.json()["status"] == "INSUFFICIENT"
-    assert backtest.json()["report"]["samples"] == 0
+    assert backtest.json()["status"] == "OK"
+    assert backtest.json()["report"]["windows"]["oos"]["status"] == "OK"
     assert client.get(f"/api/agents/{agent_id}").json()["agent"]["status"] == "BACKTESTED"
 
     paper = client.post(f"/api/agents/{agent_id}/deploy-paper")
@@ -125,7 +127,6 @@ def test_api_compile_create_backtest_and_keep_v1(tmp_path):
     assert "BACKTEST_FINISHED" in kinds
     assert "DEPLOYED" in kinds
     stats = client.get(f"/api/agents/{agent_id}/stats").json()
-    assert stats["backtest_status"] == "INSUFFICIENT"
-    assert stats["samples"] == 0
-    assert stats["missing"]
+    assert stats["backtest_status"] is None
+    assert client.get(f"/api/agents/{agent_id}").json()["agent"]["status"] == "DRAFT"
     store.close()

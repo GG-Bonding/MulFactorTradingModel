@@ -187,9 +187,15 @@ def create_app(store: ProductStore) -> FastAPI:
 
     @app.get("/api/agents/{agent_id}/stats")
     def stats(agent_id: str) -> dict:
-        _missing(store, agent_id)
+        agent = store.get_agent(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
         runs = store.list_backtests(agent_id)
-        latest = runs[-1]["report"] if runs else None
+        if agent.active_version_id is not None:
+            scoped = [row for row in runs if row["version_id"] == agent.active_version_id]
+        else:
+            scoped = runs
+        latest = scoped[-1]["report"] if scoped else None
         net = (latest or {}).get("net") or {}
         oos = ((latest or {}).get("windows") or {}).get("oos") or {}
         trades_rows = store.list_paper_trades(agent_id)
