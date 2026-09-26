@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from dataclasses import replace
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from gold_signal.compiler import compile_idea
+from gold_signal.domain.models import TransitionError
+from gold_signal.persistence.service import (
+    add_hypothesis_version,
+    create_from_idea,
+    deploy_paper,
+    pause_agent,
+    run_backtest,
+)
+from gold_signal.persistence.store import ProductStore, VersionImmutable
+
+
+class IdeaIn(BaseModel):
+    idea: str
+
+
+class VersionIn(BaseModel):
+    yaml: str
+
+
+class AgentUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+def create_app(store: ProductStore) -> FastAPI:
+    app = FastAPI(title="Trading Agent API")
+    app.state.store = store
+
+    @app.post("/api/agents/compile")
+    def compile_agent(body: IdeaIn) -> dict:
+        result = compile_idea(body.idea)
+        if not result.ok or result.spec is None:
+            raise HTTPException(status_code=400, detail={"errors": list(result.errors)})
+        spec = result.spec
+        return {
+            "asset": spec.asset,
+            "entry": spec.entry,
+            "trigger": spec.trigger,
+            "confirmations": [
+                {"factor": item.factor, "operator": item.operator, "value": item.value}
+                for item in spec.confirmations
+            ],
+            "yaml": result.yaml,
+        }
+
+    @app.post("/api/agents", status_code=201)
+    def create_agent_route(body: IdeaIn) -> dict:
+        try:
+            agent, version = create_from_idea(store, body.idea)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"agent": _agent_json(agent), "version": _version_json(version)}
+
+    @app.put("/api/agents/{agent_id}")
+    def update_agent(agent_id: str, body: AgentUpdate) -> dict:
+        agent = store.get_agent(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        updated = replace(
+            agent,
+            name=agent.name if body.name is None else body.name,
+            description=agent.description if body.description is None else body.description,
+            updated_at=datetime.now(timezone.utc),
+        )
+        store.save_agent(updated)
+        return _agent_json(updated)
+
+    @app.get("/api/agents")
+    def list_agents() -> dict:
+        return {"agents": [_agent_json(item) for item in store.list_agents()]}
+
+    @app.get("/api/agents/{agent_id}")
+    def get_agent(agent_id: str) -> dict:
+        agent = store.get_agent(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        return {
+            "agent": _agent_json(agent),
+            "versions": [_version_json(item) for item in store.list_versions(agent_id)],
+        }
+
+    @app.post("/api/agents/{agent_id}/versions", status_code=201)
+    def create_version(agent_id: str, body: VersionIn) -> dict:
+        try:
+            version = add_hypothesis_version(store, agent_id, body.yaml)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="agent not found") from exc
+        except (ValueError, VersionImmutable) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _version_json(version)
+
+    @app.post("/api/agents/{agent_id}/backtests", status_code=201)
+    def create_backtest(agent_id: str) -> dict:
+        try:
+            return run_backtest(store, agent_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="agent not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/agents/{agent_id}/backtests")
+    def list_backtests(agent_id: str) -> dict:
+        _missing(store, agent_id)
+        return {"backtests": store.list_backtests(agent_id)}
+
+    @app.post("/api/agents/{agent_id}/deploy-paper")
+    def deploy(agent_id: str) -> dict:
+        try:
+            agent = deploy_paper(store, agent_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="agent not found") from exc
+        except TransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _agent_json(agent)
+
+    @app.post("/api/agents/{agent_id}/pause")
+    def pause(agent_id: str) -> dict:
+        try:
+            agent = pause_agent(store, agent_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="agent not found") from exc
+        except TransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _agent_json(agent)
+
+    @app.get("/api/agents/{agent_id}/signals")
+    def signals(agent_id: str) -> dict:
+        _missing(store, agent_id)
+        return {"signals": store.list_signals(agent_id)}
+
+    @app.get("/api/agents/{agent_id}/trades")
+    def trades(agent_id: str) -> dict:
+        _missing(store, agent_id)
+        return {"trades": store.list_paper_trades(agent_id)}
+
+    @app.get("/api/agents/{agent_id}/activities")
+    def activities(agent_id: str) -> dict:
+        _missing(store, agent_id)
+        return {"activities": store.list_activities(agent_id)}
+
+    @app.get("/api/agents/{agent_id}/stats")
+    def stats(agent_id: str) -> dict:
+        _missing(store, agent_id)
+        runs = store.list_backtests(agent_id)
+        latest = runs[-1]["report"] if runs else None
+        net = (latest or {}).get("net") or {}
+        oos = ((latest or {}).get("windows") or {}).get("oos") or {}
+        trades_rows = store.list_paper_trades(agent_id)
+        paper_nets = [row["net_return"] for row in trades_rows if row["net_return"] is not None]
+        paper_avg = None if not paper_nets else sum(paper_nets) / len(paper_nets)
+        return {
+            "backtest_status": None if latest is None else latest.get("status"),
+            "samples": None if latest is None else latest.get("samples"),
+            "avg_net": net.get("avg_return"),
+            "median_net": net.get("median_return"),
+            "win_rate": net.get("win_rate"),
+            "profit_factor": net.get("profit_factor"),
+            "avg_mfe": net.get("avg_mfe"),
+            "avg_mae": net.get("avg_mae"),
+            "oos_samples": oos.get("samples"),
+            "oos_avg_net": oos.get("avg_return"),
+            "paper_samples": len(paper_nets),
+            "paper_avg_net": paper_avg,
+            "missing": [] if latest is None else latest.get("missing") or [],
+        }
+
+    return app
+
+
+def _missing(store: ProductStore, agent_id: str) -> None:
+    if store.get_agent(agent_id) is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+
+
+def _agent_json(agent: object) -> dict:
+    return {
+        "id": agent.id,
+        "name": agent.name,
+        "description": agent.description,
+        "status": agent.status.value,
+        "active_version_id": agent.active_version_id,
+    }
+
+
+def _version_json(version: object) -> dict:
+    return {
+        "id": version.id,
+        "agent_id": version.agent_id,
+        "version": version.version,
+        "hypothesis_sha256": version.hypothesis_sha256,
+        "hypothesis_yaml": version.hypothesis_yaml,
+    }
