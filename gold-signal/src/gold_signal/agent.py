@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from gold_signal.compiler import CompileResult, compile_idea, render_hypothesis
@@ -12,9 +12,7 @@ from gold_signal.observation import EventRecord, FactorResolver
 from gold_signal.replay_clock import DecisionRecord, TradeOutcome
 from gold_signal.research import (
     confirmation_value,
-    decide_at,
     edge_distribution,
-    observations_from_bars,
 )
 
 _EVENT_LABELS = {
@@ -57,11 +55,16 @@ def agent_view(
     observations: list,
     historical: dict | None = None,
     paper_returns: list[float] | None = None,
+    context: object | None = None,
 ) -> dict:
     """Explain the engine decision. The numbers come from the replay, not from a model."""
-    ready_at = event.published_at + timedelta(minutes=1)
-    now = ready_at if ready_at >= event.available_at else event.available_at
-    decision = decide_at(spec, event, FactorResolver(observations), now)
+    from gold_signal.runtime.context import ReplayEvaluationContext, evaluation_now
+    from gold_signal.runtime.engine import HypothesisEngine
+
+    if context is None:
+        context = ReplayEvaluationContext(tuple(observations), evaluation_now(event))
+    decision = HypothesisEngine().evaluate(spec, event, context)
+    now = context.now
     conditions = explain_conditions(spec, event, observations, now)
     passed = sum(1 for row in conditions if row["passed"])
     yaml = render_hypothesis(spec)
@@ -289,23 +292,8 @@ def view_from_market(
     paper_returns: list[float] | None = None,
 ) -> dict:
     """Read the live snapshot as knowable closes and explain the spec. No model call."""
-    observations = []
-    for asset, bars in (
-        (market.xau, market.xau_bars),
-        (market.xag, market.xag_bars),
-        (market.eurusd, market.eurusd_bars),
-    ):
-        if not asset.code or asset.code == "FLAT" or not bars:
-            continue
-        observations.extend(
-            observations_from_bars(
-                f"market.{asset.code}.close",
-                bars,
-                symbol=asset.code,
-                source="live",
-                timestamp_kind="close",
-            )
-        )
+    from gold_signal.runtime.context import LiveEvaluationContext
+
     event = EventRecord(
         event_id=news.event_id,
         event_type="",
@@ -316,4 +304,5 @@ def view_from_market(
         content=news.content or news.title,
         source="live",
     )
-    return agent_view(spec, event, observations, historical, paper_returns)
+    context = LiveEvaluationContext.from_market(market, event)
+    return agent_view(spec, event, list(context.observations), historical, paper_returns, context)

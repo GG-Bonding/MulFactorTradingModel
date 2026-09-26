@@ -6,7 +6,7 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from gold_signal.hypothesis import HypothesisSpec, _check, resolve_direction
+from gold_signal.hypothesis import HypothesisSpec
 from gold_signal.models import Bar
 from gold_signal.news import CLASSIFIER_VERSION
 from gold_signal.observation import EventRecord, FactorResolver, Observation
@@ -14,7 +14,6 @@ from gold_signal.replay_clock import (
     CostModel,
     DecisionRecord,
     TradeOutcome,
-    fill_price,
     measure_outcome,
     reaction_1m,
 )
@@ -94,61 +93,12 @@ def decide_at(
     resolver: FactorResolver,
     now: datetime,
 ) -> DecisionRecord:
-    """One decision. reaction_1m is invisible until that minute's print exists."""
-    ready_at = event.published_at + timedelta(minutes=1)
-    blank = dict(
-        event_id=event.event_id,
-        hypothesis_id=spec.id,
-        evaluated_at=now,
-        entry_at=None,
-        entry_price=None,
-    )
-    if now < event.available_at or now < ready_at:
-        return DecisionRecord(side="WAITING", reasons=("reaction minute has not arrived",), **blank)
-    text = _event_text(event)
-    direction, why = resolve_direction(spec, text)
-    if why or direction == 0:
-        return DecisionRecord(side="FLAT", reasons=(why or "news has no direction for this asset",), **blank)
-    values: dict[str, float | None] = {}
-    for condition in spec.confirmations:
-        change = confirmation_value(condition.factor, resolver, event.published_at, now)
-        if change is None:
-            return DecisionRecord(side="WAITING", reasons=(f"{condition.factor} is waiting",), **blank)
-        values[condition.factor] = change
-    for condition in spec.confirmations:
-        ok, gap = _check(condition, values, direction)
-        if gap:
-            return DecisionRecord(side="FLAT", reasons=(gap,), **blank)
-        if not ok:
-            return DecisionRecord(
-                side="FLAT",
-                reasons=(f"failed {condition.factor} {condition.operator}",),
-                **blank,
-            )
-    if spec.entry in ("LONG", "SHORT"):
-        side = spec.entry
-    elif spec.entry == "FOLLOW_NEWS":
-        side = "LONG" if direction > 0 else "SHORT"
-    else:
-        return DecisionRecord(side="FLAT", reasons=(f"unsupported entry {spec.entry}",), **blank)
-    entry = resolver.price_at(price_factor(spec.asset), now, now)
-    entry_at, entry_price = fill_price(
-        side,
-        None if entry is None else entry.value,
-        None if entry is None else entry.observed_at,
-        ready_at,
-    )
-    if entry_price is None or entry_at is None:
-        return DecisionRecord(side="WAITING", reasons=("entry print is not knowable yet",), **blank)
-    return DecisionRecord(
-        side=side,
-        reasons=(f"{len(spec.confirmations)}/{len(spec.confirmations)} confirmations passed",),
-        entry_at=entry_at,
-        entry_price=entry_price,
-        event_id=event.event_id,
-        hypothesis_id=spec.id,
-        evaluated_at=now,
-    )
+    """Replay clock entry. The decision itself is HypothesisEngine.evaluate."""
+    from gold_signal.runtime.context import ReplayEvaluationContext
+    from gold_signal.runtime.engine import HypothesisEngine
+
+    context = ReplayEvaluationContext(tuple(resolver.observations), now)
+    return HypothesisEngine().evaluate(spec, event, context)
 
 
 def replay_event(
