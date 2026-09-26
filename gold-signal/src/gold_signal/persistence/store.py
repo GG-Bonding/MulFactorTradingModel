@@ -7,6 +7,8 @@ from pathlib import Path
 
 from gold_signal.domain.models import Agent, AgentStatus, AgentVersion, TransitionError
 
+SCHEMA_VERSION = 1
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
@@ -78,8 +80,18 @@ class ProductStore:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
+        applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
+        if SCHEMA_VERSION not in applied:
+            self._conn.executescript(SCHEMA)
+            self._conn.execute("INSERT INTO schema_migrations (version) VALUES (?)", (SCHEMA_VERSION,))
+
+    def ping(self) -> None:
+        self._conn.execute("SELECT 1 FROM agents").fetchone()
 
     def close(self) -> None:
         self._conn.close()

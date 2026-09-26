@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import uvicorn
 
@@ -8,8 +9,10 @@ from gold_signal.persistence.store import ProductStore
 
 def main() -> None:
     root = Path(__file__).resolve().parents[3]
-    store = ProductStore(root / "data" / "agents.sqlite")
-    uvicorn.run(create_app(store), host="127.0.0.1", port=8765)
+    db = Path(os.environ.get("AGENT_DB", root / "data" / "agents.sqlite"))
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8765"))
+    uvicorn.run(create_app(ProductStore(db)), host=host, port=port)
 
 
 if __name__ == "__main__":

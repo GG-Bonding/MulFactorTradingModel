@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import base64
+import json
+import logging
+import os
+import time
 from datetime import datetime, timezone
 from dataclasses import replace
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from gold_signal.compiler import compile_idea
@@ -56,6 +62,16 @@ class TickIn(BaseModel):
 def create_app(store: ProductStore) -> FastAPI:
     app = FastAPI(title="Trading Agent API")
     app.state.store = store
+    _install_guards(app)
+
+    @app.get("/healthz")
+    def healthz() -> dict:
+        return {"status": "ok"}
+
+    @app.get("/readyz")
+    def readyz() -> dict:
+        store.ping()
+        return {"status": "ready"}
 
     @app.post("/api/agents/compile")
     def compile_agent(body: IdeaIn) -> dict:
@@ -228,6 +244,51 @@ def create_app(store: ProductStore) -> FastAPI:
 
     mount_ui(app)
     return app
+
+
+def _install_guards(app: FastAPI) -> None:
+    expected = os.environ.get("AGENT_BASIC_AUTH", "").strip()
+    log = logging.getLogger("gold_signal.access")
+
+    @app.middleware("http")
+    async def guard(request, call_next):
+        started = time.perf_counter()
+        if expected and request.url.path not in ("/healthz", "/readyz"):
+            header = request.headers.get("authorization", "")
+            if not _basic_matches(header, expected):
+                response = JSONResponse(
+                    {"detail": "authentication required"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Basic"},
+                )
+                _log_access(log, request, response.status_code, started)
+                return response
+        response = await call_next(request)
+        _log_access(log, request, response.status_code, started)
+        return response
+
+
+def _basic_matches(header: str, expected: str) -> bool:
+    if not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header.split(" ", 1)[1]).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return decoded == expected
+
+
+def _log_access(log: logging.Logger, request, status: int, started: float) -> None:
+    log.info(
+        json.dumps(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "status": status,
+                "ms": round((time.perf_counter() - started) * 1000, 1),
+            }
+        )
+    )
 
 
 def _missing(store: ProductStore, agent_id: str) -> None:

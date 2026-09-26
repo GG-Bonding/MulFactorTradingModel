@@ -2,6 +2,36 @@
 
 最小可运行黄金实时信号：新闻提出假设，价格做最终裁判。
 
+交易想法产品是 **Trading Agents 1.0.0**。一句话编译成可回测、可模拟的 Agent。订单只来自已经版本化的假设，不来自模型的自由文本。
+
+```bash
+cd gold-signal
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+export PYTHONPATH=src
+python -m gold_signal.api
+```
+
+打开 http://127.0.0.1:8765/agents 。没有历史行情时，回测页写明缺什么，不会把样本数显示成 0 来暗示策略从没触发。
+
+环境变量：
+
+```text
+AGENT_DB=data/agents.sqlite
+HOST=127.0.0.1
+PORT=8765
+AGENT_BASIC_AUTH=user:password
+```
+
+`AGENT_BASIC_AUTH` 留空则本地不要求登录。`/healthz` 和 `/readyz` 始终公开。Docker 构建在本目录：`docker build -t trading-agents:1.0.0 .`，并把 `HOST=0.0.0.0`。
+
+示例规格在 `examples/nfp_gold.yaml`。把它粘进页面，或直接用这句话：
+
+```text
+如果非农低于预期，黄金和白银一分钟上涨，我做多黄金。
+```
+
 输出：`BUY` / `SELL` / `HOLD`。
 
 ## 如何申请 / 配置 Token

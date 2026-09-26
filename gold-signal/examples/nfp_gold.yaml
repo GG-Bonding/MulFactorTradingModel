@@ -1,0 +1,18 @@
+id: nfp_below_expectation_xauusd_long
+name: 非农低于预期后做多XAUUSD
+asset: XAUUSD
+family: metal
+entry: LONG
+trigger: NFP_BELOW_EXPECTATION
+horizons:
+  - 1m
+  - 3m
+  - 5m
+  - 15m
+confirmations:
+  - factor: XAUUSD.reaction_1m
+    operator: ">"
+    value: 0.0008
+  - factor: XAGUSD.reaction_1m
+    operator: ">"
+    value: 0.0008
