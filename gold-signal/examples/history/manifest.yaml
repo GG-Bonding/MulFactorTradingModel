@@ -1,0 +1,8 @@
+dataset: nfp_history_v1
+quality: RECONSTRUCTED
+sources:
+  news: jin10
+  market: yahoo
+point_in_time:
+  news: partial
+  market: reconstructed

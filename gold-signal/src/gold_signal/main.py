@@ -416,7 +416,10 @@ def run_backtest(strategy: Path, start: str, end: str) -> int:
     CONSOLE.print(f"{report['hypothesis']} {report['start']} → {report['end']}")
     if report.get("yaml_sha256"):
         CONSOLE.print(f"yaml={report['yaml_sha256']}")
-    CONSOLE.print(f"status={report['status']} samples={report['samples']}")
+    CONSOLE.print(
+        f"run={report.get('run_status', report.get('status'))} "
+        f"evidence={report.get('evidence_status', report.get('status'))} samples={report['samples']}"
+    )
     counts = report.get("counts") or {}
     if counts:
         CONSOLE.print(

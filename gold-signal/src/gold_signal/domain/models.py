@@ -107,8 +107,11 @@ def transition(
     *,
     at: datetime,
     backtest_status: str | None = None,
+    evidence_status: str | None = None,
 ) -> Agent:
-    if target == AgentStatus.VALIDATED and backtest_status != "OK":
+    """VALIDATED means the evidence grade is VALID. A finished run is not enough."""
+    grade = evidence_status if evidence_status is not None else backtest_status
+    if target == AgentStatus.VALIDATED and grade != "VALID":
         raise TransitionError("INSUFFICIENT backtest cannot be marked VALIDATED")
     if target not in _ALLOWED[agent.status]:
         raise TransitionError(f"{agent.status.value} cannot transition to {target.value}")

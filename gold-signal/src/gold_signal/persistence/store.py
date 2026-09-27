@@ -167,7 +167,7 @@ class ProductStore:
             INSERT INTO backtest_runs (id, agent_id, version_id, status, report_json, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (run_id, agent_id, version_id, str(report.get("status") or "INSUFFICIENT"), json.dumps(report), _stamp(now)),
+            (run_id, agent_id, version_id, str(report.get("run_status") or "FAILED"), json.dumps(report), _stamp(now)),
         )
         self._conn.commit()
 

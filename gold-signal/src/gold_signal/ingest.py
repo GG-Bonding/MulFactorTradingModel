@@ -4,7 +4,7 @@ import os
 import queue
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from gold_signal.models import FlashNews, MarketSnapshot
 from gold_signal.observation import EventRecord, Observation
@@ -36,6 +36,52 @@ class ScriptedFeed:
             return None
 
 
+class FeedHealth:
+    """What /readyz and the agent page can say about the live feed."""
+
+    def __init__(self) -> None:
+        self.status = "OFF"
+        self.last_success_at: datetime | None = None
+        self.last_error: str | None = None
+        self.last_market_at: datetime | None = None
+        self.last_news_at: datetime | None = None
+        self.consecutive_failures = 0
+        self._lock = threading.Lock()
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "ingest": self.status,
+                "last_success_at": _iso(self.last_success_at),
+                "last_error": self.last_error,
+                "last_market_at": _iso(self.last_market_at),
+                "last_news_at": _iso(self.last_news_at),
+                "consecutive_failures": self.consecutive_failures,
+            }
+
+    def mark_starting(self) -> None:
+        with self._lock:
+            if self.status == "OFF":
+                self.status = "STARTING"
+
+    def mark_success(self, batch: IngestBatch | None, *, at: datetime) -> None:
+        with self._lock:
+            self.status = "READY"
+            self.consecutive_failures = 0
+            self.last_error = None
+            self.last_success_at = at
+            if batch is not None and batch.observations:
+                self.last_market_at = max(row.observed_at for row in batch.observations)
+            if batch is not None and batch.event is not None:
+                self.last_news_at = batch.event.published_at
+
+    def mark_failure(self, exc: Exception) -> None:
+        with self._lock:
+            self.status = "DEGRADED"
+            self.consecutive_failures += 1
+            self.last_error = str(exc)[:300]
+
+
 class Jin10Feed:
     def __init__(self, token: str, url: str | None = None) -> None:
         self.token = token
@@ -58,21 +104,30 @@ class Jin10Feed:
             now = market.as_of
             news = pick_news(news_list, now)
             return IngestBatch(now, tuple(snapshot_observations(market)), _event_from_news(news, now))
-        except Exception:
-            return None
         finally:
             client.close()
 
 
 class IngestLoop:
-    def __init__(self, store: ProductStore, feed: ScriptedFeed | Jin10Feed, runtime: AgentRuntime | None = None) -> None:
+    def __init__(
+        self,
+        store: ProductStore,
+        feed: ScriptedFeed | Jin10Feed,
+        runtime: AgentRuntime | None = None,
+        *,
+        interval: float | None = None,
+    ) -> None:
         self.store = store
         self.feed = feed
         self.runtime = runtime or AgentRuntime()
+        self.interval = _ingest_interval() if interval is None else interval
+        self.health = FeedHealth()
+        self._seen: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
+        self.health.mark_starting()
         self._thread = threading.Thread(target=self._run, name="agent-ingest", daemon=True)
         self._thread.start()
 
@@ -83,16 +138,29 @@ class IngestLoop:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            batch = self.feed.poll()
-            if batch is None:
-                self._stop.wait(0.02)
+            try:
+                batch = self.feed.poll()
+            except Exception as exc:
+                self.health.mark_failure(exc)
+                self._stop.wait(self._backoff())
                 continue
-            self.runtime.tick(
-                self.store,
-                now=batch.now,
-                observations=list(batch.observations),
-                event=batch.event,
-            )
+            wall = datetime.now(timezone.utc)
+            signature = None if batch is None else _signature(batch)
+            if batch is not None and signature != self._seen:
+                self.runtime.tick(
+                    self.store,
+                    now=batch.now,
+                    observations=list(batch.observations),
+                    event=batch.event,
+                )
+                self._seen = signature
+            self.health.mark_success(batch, at=wall)
+            self._stop.wait(self.interval if batch is not None else max(self.interval, 0.02))
+
+    def _backoff(self) -> float:
+        failures = max(self.health.consecutive_failures, 1)
+        base = self.interval if self.interval > 0 else 0.05
+        return min(60.0, base * (2 ** (failures - 1)))
 
 
 def snapshot_observations(market: MarketSnapshot) -> list[Observation]:
@@ -111,6 +179,7 @@ def snapshot_observations(market: MarketSnapshot) -> list[Observation]:
                 symbol=asset.code,
                 source="live",
                 timestamp_kind="close",
+                quality="VERIFIED",
             )
         )
     return rows
@@ -146,4 +215,30 @@ def _event_from_news(news: FlashNews | None, now: datetime) -> EventRecord | Non
         title=news.title,
         content=news.content or news.title,
         source="jin10",
+        quality="VERIFIED",
     )
+
+
+def _ingest_interval() -> float:
+    raw = os.getenv("AGENT_INGEST_INTERVAL", "5")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 5.0
+
+
+def _signature(batch: IngestBatch) -> str:
+    event_id = "" if batch.event is None else batch.event.event_id
+    prints = tuple(
+        sorted(
+            (row.factor, row.observed_at.isoformat(), row.value)
+            for row in batch.observations
+        )
+    )
+    return repr((event_id, prints))
+
+
+def _iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()

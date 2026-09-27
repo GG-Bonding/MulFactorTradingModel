@@ -26,10 +26,14 @@ def test_restart_keeps_v1_backtest_signal_and_trade(tmp_path):
     store = ProductStore(path)
     agent, version = create_from_idea(store, IDEA, now=_now())
     backtest = run_backtest(store, agent.id, now=_now())
-    assert backtest["status"] == "OK"
+    assert backtest["status"] == "COMPLETED"
     assert backtest["version_id"] == version.id
+    assert backtest["report"]["run_status"] == "COMPLETED"
+    assert backtest["report"]["evidence_status"] == "NO_TRADES"
     assert backtest["report"]["counts"]["events"] == 1
-    assert backtest["report"]["windows"]["oos"]["status"] == "OK"
+    assert backtest["report"]["trades"] == 0
+    assert backtest["report"]["data_quality"]["News"] == "RECONSTRUCTED"
+    assert backtest["report"]["windows"]["oos"]["evidence_status"] == "NO_TRADES"
     signal = record_signal(
         store,
         agent.id,
@@ -108,13 +112,14 @@ def test_api_compile_create_backtest_and_keep_v1(tmp_path):
 
     backtest = client.post(f"/api/agents/{agent_id}/backtests")
     assert backtest.status_code == 201
-    assert backtest.json()["status"] == "OK"
-    assert backtest.json()["report"]["windows"]["oos"]["status"] == "OK"
+    assert backtest.json()["status"] == "COMPLETED"
+    assert backtest.json()["report"]["evidence_status"] == "NO_TRADES"
+    assert backtest.json()["report"]["windows"]["oos"]["evidence_status"] == "NO_TRADES"
     assert client.get(f"/api/agents/{agent_id}").json()["agent"]["status"] == "BACKTESTED"
 
     paper = client.post(f"/api/agents/{agent_id}/deploy-paper")
-    assert paper.status_code == 200
-    assert paper.json()["status"] == "PAPER"
+    assert paper.status_code == 409
+    assert "NO_TRADES" in paper.json()["detail"]
 
     yaml = created.json()["version"]["hypothesis_yaml"].replace("0.0008", "0.0012")
     newer = client.post(f"/api/agents/{agent_id}/versions", json={"yaml": yaml})
@@ -125,7 +130,6 @@ def test_api_compile_create_backtest_and_keep_v1(tmp_path):
     kinds = [item["kind"] for item in client.get(f"/api/agents/{agent_id}/activities").json()["activities"]]
     assert "AGENT_CREATED" in kinds
     assert "BACKTEST_FINISHED" in kinds
-    assert "DEPLOYED" in kinds
     stats = client.get(f"/api/agents/{agent_id}/stats").json()
     assert stats["backtest_status"] is None
     assert client.get(f"/api/agents/{agent_id}").json()["agent"]["status"] == "DRAFT"

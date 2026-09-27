@@ -57,7 +57,8 @@ confirmations:
 """
     )
     report = historical_validation(spec, "2025-01-01", "2026-09-01")
-    assert report["status"] == "INSUFFICIENT"
+    assert report["run_status"] == "FAILED"
+    assert report["evidence_status"] == "NO_DATA"
     assert report["samples"] == 0
     assert report["win_rate"] is None
     assert report["avg_return"] is None

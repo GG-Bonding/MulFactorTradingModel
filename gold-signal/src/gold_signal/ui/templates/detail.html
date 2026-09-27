@@ -3,6 +3,9 @@
 <p><a href="/agents">Agents</a></p>
 <h1>{{ agent.name }}</h1>
 <p class="status">{{ agent.status.value }} · {{ current_side }}</p>
+<p class="status">Data Feed {{ feed.label }}</p>
+<p>Last update {{ feed.updated }}</p>
+{% if feed.error %}<p class="error">{{ feed.error }}</p>{% endif %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <p>{{ agent.description }}</p>
 
@@ -21,8 +24,12 @@
   {% if agent.status.value == "DRAFT" %}
   <form class="inline" method="post" action="/agents/{{ agent.id }}/backtest"><button type="submit">Run Backtest</button></form>
   {% endif %}
-  {% if agent.status.value == "BACKTESTED" %}
+  {% if can_paper %}
   <form class="inline" method="post" action="/agents/{{ agent.id }}/deploy-paper"><button type="submit">Deploy Paper</button></form>
+  {% elif report and report.evidence_status == "NO_TRADES" %}
+  <span>No trades, so this version cannot go to paper.</span>
+  {% elif report and report.evidence_status == "NO_DATA" %}
+  <span>No historical events, so this version cannot go to paper.</span>
   {% endif %}
   {% if agent.status.value == "PAPER" %}
   <form class="inline" method="post" action="/agents/{{ agent.id }}/pause"><button class="secondary" type="submit">Pause</button></form>
@@ -31,13 +38,19 @@
 </p>
 
 <h2>Historical</h2>
-{% if report and report.status == "OK" %}
-<p>Events {{ report.counts.events }} · Trades {{ report.samples }} · Win rate {{ pct(report.net.win_rate) }} · Avg {{ pct(report.net.avg_return) }} · Median {{ pct(report.net.median_return) }}</p>
-<p>Profit factor {{ report.net.profit_factor if report.net.profit_factor is not none else "—" }} · MFE {{ pct(report.net.avg_mfe) }} · MAE {{ pct(report.net.avg_mae) }}</p>
-{% if latest %}<p><a href="/agents/{{ agent.id }}/backtests/{{ latest.id }}">Backtest detail</a></p>{% endif %}
-{% elif report %}
+{% if report and report.run_status == "FAILED" %}
 <p class="error">Historical backtest cannot run.</p>
 <ul>{% for item in report.missing %}<li>{{ item }}</li>{% endfor %}</ul>
+{% if latest %}<p><a href="/agents/{{ agent.id }}/backtests/{{ latest.id }}">Backtest detail</a></p>{% endif %}
+{% elif report %}
+<p class="status">Run {{ report.run_status }} · Evidence {{ report.evidence_status }}</p>
+{% if report.evidence_status == "VALID" %}
+<p>Historical Evidence Available</p>
+{% else %}
+<p>Fewer than {{ min_trades }} trades. This run is not historical evidence.</p>
+{% endif %}
+<p>Events {{ report.events }} · Trades {{ report.trades }} · Win rate {{ pct(report.net.win_rate) }} · Avg {{ pct(report.net.avg_return) }} · Median {{ pct(report.net.median_return) }}</p>
+<p>Profit factor {{ report.net.profit_factor if report.net.profit_factor is not none else "—" }} · MFE {{ pct(report.net.avg_mfe) }} · MAE {{ pct(report.net.avg_mae) }}</p>
 {% if latest %}<p><a href="/agents/{{ agent.id }}/backtests/{{ latest.id }}">Backtest detail</a></p>{% endif %}
 {% else %}
 <p>还没有回测。</p>
@@ -52,8 +65,8 @@
   <tr>
     <td>{{ window.name }}</td>
     <td>{{ window.status }}</td>
-    <td>{% if window.status == "INSUFFICIENT" %}—{% else %}{{ window.samples }}{% endif %}</td>
-    <td>{% if window.status == "INSUFFICIENT" %}—{% else %}{{ pct(window.avg_return) }}{% endif %}</td>
+    <td>{% if window.evidence_status == "NO_DATA" %}—{% else %}{{ window.samples }}{% endif %}</td>
+    <td>{% if window.evidence_status == "NO_DATA" %}—{% else %}{{ pct(window.avg_return) }}{% endif %}</td>
   </tr>
   {% endfor %}
   </tbody>

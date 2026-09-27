@@ -47,7 +47,9 @@ def test_paper_agent_waits_one_minute_then_fills_and_settles_five_minutes(tmp_pa
     news = _event(published)
     tape = _tape(published)
     report = run_backtest(store, agent_id, now=published, events=[news], observations=tape)
-    assert report["status"] == "OK"
+    assert report["status"] == "COMPLETED"
+    assert report["report"]["run_status"] == "COMPLETED"
+    assert report["report"]["evidence_status"] == "INSUFFICIENT"
     assert report["report"]["windows"]["oos"]["samples"] == 1
     assert report["version_id"] == version_id
     assert client.get(f"/api/agents/{agent_id}").json()["agent"]["status"] == "BACKTESTED"

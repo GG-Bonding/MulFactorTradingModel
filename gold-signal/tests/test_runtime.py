@@ -87,6 +87,10 @@ def test_versions_stay_immutable_and_draft_cannot_skip_to_paper():
         transition(agent, AgentStatus.PAPER, at=now)
     with pytest.raises(TransitionError, match="INSUFFICIENT"):
         transition(agent, AgentStatus.VALIDATED, at=now, backtest_status="INSUFFICIENT")
+    with pytest.raises(TransitionError, match="INSUFFICIENT"):
+        transition(agent, AgentStatus.VALIDATED, at=now, backtest_status="OK")
+    validated = transition(agent, AgentStatus.VALIDATED, at=now, evidence_status="VALID")
+    assert validated.status == AgentStatus.VALIDATED
 
     saved = transition(agent, AgentStatus.BACKTESTED, at=now)
     assert saved.status == AgentStatus.BACKTESTED

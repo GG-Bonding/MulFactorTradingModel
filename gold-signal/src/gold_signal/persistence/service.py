@@ -8,6 +8,7 @@ from gold_signal.domain.models import (
     Agent,
     AgentStatus,
     AgentVersion,
+    TransitionError,
     activate,
     add_version,
     create_agent,
@@ -95,19 +96,26 @@ def run_backtest(
             report["missing"] = list(dict.fromkeys([*report.get("missing", []), *gaps]))
         else:
             report = replay_report(spec, "2024-01-01", "2026-09-30", loaded_events, loaded_obs)
+        report["dataset"] = default_archive().manifest()
     run_id = uuid.uuid4().hex
     store.insert_backtest(run_id, agent.id, version.id, report, stamp)
-    if agent.status == AgentStatus.DRAFT and report.get("status") == "OK":
-        agent = transition(agent, AgentStatus.VALIDATED, at=stamp, backtest_status="OK")
+    evidence = report.get("evidence_status")
+    if agent.status == AgentStatus.DRAFT and report.get("run_status") == "COMPLETED" and evidence == "VALID":
+        agent = transition(agent, AgentStatus.VALIDATED, at=stamp, evidence_status="VALID")
         agent = transition(agent, AgentStatus.BACKTESTED, at=stamp)
-    elif agent.status == AgentStatus.DRAFT:
+    elif agent.status == AgentStatus.DRAFT and report.get("run_status") == "COMPLETED":
         agent = transition(agent, AgentStatus.BACKTESTED, at=stamp)
     store.save_agent(agent)
     store.insert_activity(
         uuid.uuid4().hex,
         agent.id,
         "BACKTEST_FINISHED",
-        {"run_id": run_id, "version_id": version.id, "status": report.get("status")},
+        {
+            "run_id": run_id,
+            "version_id": version.id,
+            "run_status": report.get("run_status"),
+            "evidence_status": report.get("evidence_status"),
+        },
         stamp,
     )
     saved = store.list_backtests(agent.id)
@@ -117,6 +125,8 @@ def run_backtest(
 def deploy_paper(store: ProductStore, agent_id: str, *, now: datetime | None = None) -> Agent:
     agent = _require_agent(store, agent_id)
     stamp = now or _now()
+    if agent.status == AgentStatus.BACKTESTED:
+        _require_tradable_evidence(store, agent)
     agent = transition(agent, AgentStatus.PAPER, at=stamp)
     store.save_agent(agent)
     store.insert_activity(uuid.uuid4().hex, agent.id, "DEPLOYED", {"version_id": agent.active_version_id}, stamp)
@@ -173,6 +183,21 @@ def record_paper_trade(store: ProductStore, trade: dict, *, now: datetime | None
         stamp,
     )
     return row
+
+
+def _require_tradable_evidence(store: ProductStore, agent: Agent) -> None:
+    """Paper needs at least one historical trade. A finished run with no trades is not enough."""
+    runs = [
+        row
+        for row in store.list_backtests(agent.id)
+        if agent.active_version_id is None or row["version_id"] == agent.active_version_id
+    ]
+    if not runs:
+        raise TransitionError("NO_DATA backtest cannot be deployed to PAPER")
+    report = runs[-1]["report"]
+    evidence = report.get("evidence_status")
+    if report.get("run_status") != "COMPLETED" or evidence not in ("INSUFFICIENT", "VALID"):
+        raise TransitionError(f"{evidence or 'NO_DATA'} backtest cannot be deployed to PAPER")
 
 
 def _require_agent(store: ProductStore, agent_id: str) -> Agent:

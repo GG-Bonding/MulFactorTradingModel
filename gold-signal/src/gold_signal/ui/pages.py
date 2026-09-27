@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from gold_signal.compiler import compile_idea, render_hypothesis
 from gold_signal.domain.models import TransitionError
 from gold_signal.hypothesis import parse_hypothesis
+from gold_signal.research import EVIDENCE_VALID_MIN_TRADES, evidence_grade
 from gold_signal.observation import EventRecord, Observation
 from gold_signal.persistence.service import (
     add_hypothesis_version,
@@ -44,7 +45,11 @@ def mount_ui(app: FastAPI) -> None:
                     "paper": None if not nets else sum(nets) / len(nets),
                 }
             )
-        return TEMPLATES.TemplateResponse(request, "agents.html", {"rows": rows, "pct": _pct})
+        return TEMPLATES.TemplateResponse(
+            request,
+            "agents.html",
+            {"rows": rows, "pct": _pct, "feed": _feed_view(request)},
+        )
 
     @app.get("/agents/new")
     def new_page(request: Request):
@@ -83,7 +88,7 @@ def mount_ui(app: FastAPI) -> None:
         agent = store.get_agent(agent_id)
         if agent is None:
             return TEMPLATES.TemplateResponse(request, "missing.html", {"message": "Agent not found"}, status_code=404)
-        return TEMPLATES.TemplateResponse(request, "detail.html", _detail_context(store, agent, error=None))
+        return TEMPLATES.TemplateResponse(request, "detail.html", _detail_context(store, agent, error=None, request=request))
 
     @app.post("/agents/{agent_id}/backtest")
     def backtest_action(request: Request, agent_id: str):
@@ -97,7 +102,7 @@ def mount_ui(app: FastAPI) -> None:
             deploy_paper(store, agent_id)
         except TransitionError as exc:
             agent = store.get_agent(agent_id)
-            context = _detail_context(store, agent, error=str(exc))
+            context = _detail_context(store, agent, error=str(exc), request=request)
             return TEMPLATES.TemplateResponse(request, "detail.html", context, status_code=409)
         return RedirectResponse(f"/agents/{agent_id}", status_code=303)
 
@@ -109,7 +114,7 @@ def mount_ui(app: FastAPI) -> None:
         except TransitionError as exc:
             agent = store.get_agent(agent_id)
             return TEMPLATES.TemplateResponse(
-                request, "detail.html", _detail_context(store, agent, error=str(exc)), status_code=409
+                request, "detail.html", _detail_context(store, agent, error=str(exc), request=request), status_code=409
             )
         return RedirectResponse(f"/agents/{agent_id}", status_code=303)
 
@@ -150,13 +155,13 @@ def mount_ui(app: FastAPI) -> None:
         )
         if stage == "arrived":
             now = published + timedelta(seconds=30)
-            observations = _prints(published, through=0)
+            observations = _prints(published, through=0, headline=headline)
         elif stage == "minute":
             now = published + timedelta(minutes=1)
-            observations = _prints(published, through=1)
+            observations = _prints(published, through=1, headline=headline)
         else:
             now = published + timedelta(minutes=6)
-            observations = _prints(published, through=6)
+            observations = _prints(published, through=6, headline=headline)
             event = None
         AgentRuntime().tick(store, now=now, observations=observations, event=event)
         return RedirectResponse(f"/agents/{agent_id}", status_code=303)
@@ -168,11 +173,19 @@ def mount_ui(app: FastAPI) -> None:
         run = next((item for item in store.list_backtests(agent_id) if item["id"] == run_id), None)
         if agent is None or run is None:
             return TEMPLATES.TemplateResponse(request, "missing.html", {"message": "Backtest not found"}, status_code=404)
-        report = run["report"]
+        report = _view_report(run["report"])
         return TEMPLATES.TemplateResponse(
             request,
             "backtest.html",
-            {"agent": agent, "run": run, "report": report, "pct": _pct, "windows": _windows(report)},
+            {
+                "agent": agent,
+                "run": run,
+                "report": report,
+                "pct": _pct,
+                "windows": _windows(report),
+                "min_trades": EVIDENCE_VALID_MIN_TRADES,
+                "feed": _feed_view(request),
+            },
         )
 
     @app.get("/agents/{agent_id}/activity")
@@ -188,7 +201,7 @@ def mount_ui(app: FastAPI) -> None:
         )
 
 
-def _detail_context(store, agent, error: str | None) -> dict:
+def _detail_context(store, agent, error: str | None, request: Request) -> dict:
     version = store.get_version(agent.active_version_id) if agent.active_version_id else None
     spec = parse_hypothesis(version.hypothesis_yaml) if version else None
     runs = [
@@ -197,7 +210,7 @@ def _detail_context(store, agent, error: str | None) -> dict:
         if agent.active_version_id is None or row["version_id"] == agent.active_version_id
     ]
     latest = runs[-1] if runs else None
-    report = latest["report"] if latest else None
+    report = _view_report(latest["report"] if latest else None)
     signals = store.list_signals(agent.id)
     return {
         "agent": agent,
@@ -215,6 +228,9 @@ def _detail_context(store, agent, error: str | None) -> dict:
         "pct": _pct,
         "published_at": "2026-03-24T14:30:00+00:00",
         "headline": "美国8月非农就业人数低于预期",
+        "can_paper": _can_paper(agent, report),
+        "min_trades": EVIDENCE_VALID_MIN_TRADES,
+        "feed": _feed_view(request),
     }
 
 
@@ -228,6 +244,45 @@ def _spec_view(spec) -> dict:
             {"factor": item.factor, "operator": item.operator, "value": item.value} for item in spec.confirmations
         ],
     }
+
+
+def _view_report(report: dict | None) -> dict | None:
+    """Older saved runs used status OK. Show them with the evidence grade."""
+    if not report or report.get("run_status"):
+        return report
+    viewed = dict(report)
+    counts = viewed.get("counts") or {}
+    events = int(counts.get("events") or 0)
+    trades = int(counts.get("long") or 0) + int(counts.get("short") or 0)
+    if viewed.get("status") == "OK":
+        viewed["run_status"] = "COMPLETED"
+        viewed["evidence_status"] = evidence_grade(events, trades)
+    else:
+        viewed["run_status"] = "FAILED"
+        viewed["evidence_status"] = "NO_DATA"
+    viewed["events"] = events
+    viewed["trades"] = trades
+    viewed["windows"] = {name: _view_window(window) for name, window in (viewed.get("windows") or {}).items()}
+    return viewed
+
+
+def _view_window(window: dict) -> dict:
+    if window.get("evidence_status"):
+        return window
+    viewed = dict(window)
+    if window.get("status") == "OK":
+        counts = window.get("counts") or {}
+        events = int(counts.get("events") or 0)
+        trades = int(counts.get("long") or 0) + int(counts.get("short") or 0)
+        if not counts:
+            trades = int(window.get("samples") or 0)
+            events = 1 if trades else 0
+        viewed["run_status"] = "COMPLETED"
+        viewed["evidence_status"] = evidence_grade(events, trades)
+    else:
+        viewed["run_status"] = "COMPLETED"
+        viewed["evidence_status"] = "NO_DATA"
+    return viewed
 
 
 def _windows(report: dict | None) -> list[dict]:
@@ -246,8 +301,50 @@ def _with_threshold(yaml: str, value: float) -> str:
     return render_hypothesis(replace(spec, confirmations=confirmations))
 
 
-def _prints(published: datetime, through: int) -> list[Observation]:
-    points = ((0, 3800.0, 40.0), (1, 3810.0, 40.1), (6, 3830.0, 40.1))
+def _can_paper(agent, report: dict | None) -> bool:
+    if agent.status.value != "BACKTESTED" or not report:
+        return False
+    return report.get("run_status") == "COMPLETED" and report.get("evidence_status") in ("INSUFFICIENT", "VALID")
+
+
+def _feed_view(request: Request) -> dict:
+    health = getattr(request.app.state, "feed", None)
+    snap = health.snapshot() if health is not None and hasattr(health, "snapshot") else {
+        "ingest": "OFF",
+        "last_success_at": None,
+        "last_market_at": None,
+        "last_error": None,
+    }
+    label = {"READY": "LIVE", "DEGRADED": "DEGRADED", "STARTING": "STARTING"}.get(snap["ingest"], "OFF")
+    return {
+        "label": label,
+        "updated": _ago(snap.get("last_success_at")),
+        "error": snap.get("last_error") if label == "DEGRADED" else None,
+    }
+
+
+def _ago(value: str | None) -> str:
+    if not value:
+        return "—"
+    stamp = datetime.fromisoformat(value)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    seconds = max(0, int((datetime.now(timezone.utc) - stamp).total_seconds()))
+    if seconds < 60:
+        return f"{seconds} sec ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} min ago"
+    return f"{minutes // 60} hr ago"
+
+
+def _prints(published: datetime, through: int, headline: str = "") -> list[Observation]:
+    falling = "高于" in headline
+    points = (
+        ((0, 4517.0, 40.0), (1, 4448.0, 39.6), (6, 4430.0, 39.5))
+        if falling
+        else ((0, 3800.0, 40.0), (1, 3810.0, 40.1), (6, 3830.0, 40.1))
+    )
     rows: list[Observation] = []
     for minute, gold, silver in points:
         if minute > through:

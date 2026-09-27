@@ -13,7 +13,11 @@ def test_release_is_1_0_0_and_health_stays_public(tmp_path, monkeypatch):
     monkeypatch.delenv("AGENT_BASIC_AUTH", raising=False)
     open_client = TestClient(create_app(store))
     assert open_client.get("/healthz").json() == {"status": "ok"}
-    assert open_client.get("/readyz").status_code == 200
+    ready = open_client.get("/readyz")
+    assert ready.status_code == 200
+    assert ready.json()["database"] == "READY"
+    assert ready.json()["ingest"] == "OFF"
+    assert ready.json()["last_market_at"] is None
     assert open_client.get("/agents").status_code == 200
 
     monkeypatch.setenv("AGENT_BASIC_AUTH", "ada:secret")

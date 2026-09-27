@@ -162,7 +162,8 @@ def test_missing_confirmation_series_refuses_the_sample():
     published = _utc(14, 30)
     observations = [row for row in _path(published) if not row.factor.startswith("market.EURUSD")]
     report = replay_report(spec, "2026-01-01", "2026-09-01", [_event(published)], observations)
-    assert report["status"] == "INSUFFICIENT"
+    assert report["run_status"] == "FAILED"
+    assert report["evidence_status"] == "NO_DATA"
     assert report["samples"] == 0
     assert report["win_rate"] is None
     assert any("EURUSD.reaction_1m" in item for item in report["missing"])
@@ -177,13 +178,15 @@ def test_replay_report_is_deterministic_and_splits_windows():
     first = replay_report(spec, "2024-01-01", "2026-09-30", events, observations, strategy_path=strategy)
     second = replay_report(spec, "2024-01-01", "2026-09-30", events, observations, strategy_path=strategy)
     assert first == second
-    assert first["status"] == "OK"
+    assert first["run_status"] == "COMPLETED"
+    assert first["evidence_status"] == "INSUFFICIENT"
+    assert first["trades"] == 1
     assert first["samples"] == 1
     assert first["counts"]["long"] == 1
     assert first["yaml_sha256"] == hashlib.sha256(strategy.read_bytes()).hexdigest()
     assert first["windows"]["oos"]["samples"] == 1
     assert first["windows"]["train"]["samples"] == 0
-    assert first["windows"]["validation"]["status"] == "INSUFFICIENT"
+    assert first["windows"]["validation"]["evidence_status"] == "NO_DATA"
     assert first["net"]["expectancy"] == first["net"]["avg_return"]
     assert first["net"]["avg_return"] < first["by_horizon"]["5m"]["gross_avg_return"]
 
@@ -206,13 +209,14 @@ def test_archive_absent_still_refuses_to_invent_a_win_rate():
     strategy = Path(__file__).parents[1] / "strategies" / "iran_gold.yaml"
     spec = load_hypothesis(strategy)
     report = historical_validation(spec, "2025-01-01", "2026-09-01", strategy_path=strategy)
-    assert report["status"] == "INSUFFICIENT"
+    assert report["run_status"] == "FAILED"
+    assert report["evidence_status"] == "NO_DATA"
     assert report["samples"] == 0
     joined = " ".join(report["missing"])
     assert "news archive" in joined
     assert "DFII10" in joined
     assert report["yaml_sha256"] == hashlib.sha256(strategy.read_bytes()).hexdigest()
-    assert report["windows"]["train"]["status"] == "INSUFFICIENT"
+    assert report["windows"]["train"]["evidence_status"] == "NO_DATA"
     assert report["windows"]["oos"]["samples"] == 0
 
 
@@ -241,3 +245,5 @@ def test_recorder_writes_confirmation_legs_and_event_body(tmp_path: Path):
     assert event["content"] == news.content
     assert event["event_type"] == "BULLISH"
     assert event["classifier_version"] == CLASSIFIER_VERSION
+    assert event["quality"] == "VERIFIED"
+    assert all(row["quality"] == "VERIFIED" for row in rows if row["kind"] == "observation")

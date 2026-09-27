@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Trading Agents</h1>
+<p class="status">Data Feed {{ feed.label }}</p>
+<p>Last update {{ feed.updated }}</p>
+{% if feed.error %}<p class="error">{{ feed.error }}</p>{% endif %}
 {% if not rows %}
 <p>还没有 Agent。从一句话开始。</p>
 {% else %}

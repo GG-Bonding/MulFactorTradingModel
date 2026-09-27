@@ -110,7 +110,8 @@ def test_compiled_idea_replays_the_same_way_twice_and_refuses_an_unsafe_factor()
     first = replay_report(nfp.spec, "2024-01-01", "2026-09-30", [news], tape)
     second = replay_report(nfp.spec, "2024-01-01", "2026-09-30", [news], tape)
     assert first == second
-    assert first["status"] == "OK"
+    assert first["run_status"] == "COMPLETED"
+    assert first["evidence_status"] == "INSUFFICIENT"
     assert first["samples"] == 1
     assert first["counts"]["long"] == 1
     net = first["net"]
@@ -131,7 +132,8 @@ def test_compiled_idea_replays_the_same_way_twice_and_refuses_an_unsafe_factor()
     cpi = compile_idea(CPI)
     assert cpi.spec is not None
     blocked = historical_validation(cpi.spec, "2024-01-01", "2026-09-30", events=[news], observations=tape)
-    assert blocked["status"] == "INSUFFICIENT"
+    assert blocked["run_status"] == "FAILED"
+    assert blocked["evidence_status"] == "NO_DATA"
     assert blocked["samples"] == 0
     assert any("DFII10" in item for item in blocked["missing"])
 

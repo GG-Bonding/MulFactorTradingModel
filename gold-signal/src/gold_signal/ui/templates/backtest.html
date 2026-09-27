@@ -2,16 +2,21 @@
 {% block body %}
 <p><a href="/agents/{{ agent.id }}">{{ agent.name }}</a></p>
 <h1>Backtest</h1>
-<p class="status">{{ run.status }}</p>
-{% if report.status != "OK" %}
+<p class="status">Run {{ report.run_status }} · Evidence {{ report.evidence_status }}</p>
+{% if report.evidence_status == "VALID" %}
+<p>Historical Evidence Available</p>
+{% elif report.run_status == "COMPLETED" %}
+<p>Fewer than {{ min_trades }} trades. This run is not historical evidence.</p>
+{% endif %}
+{% if report.run_status != "COMPLETED" %}
 <p class="error">Historical backtest cannot run.</p>
 <ul>{% for item in report.missing %}<li>{{ item }}</li>{% endfor %}</ul>
 {% else %}
 <h2>Historical</h2>
 <table>
   <tbody>
-    <tr><th>Events</th><td>{{ report.counts.events }}</td></tr>
-    <tr><th>Trades</th><td>{{ report.samples }}</td></tr>
+    <tr><th>Events</th><td>{{ report.events }}</td></tr>
+    <tr><th>Trades</th><td>{{ report.trades }}</td></tr>
     <tr><th>Win rate</th><td>{{ pct(report.net.win_rate) }}</td></tr>
     <tr><th>Avg net</th><td>{{ pct(report.net.avg_return) }}</td></tr>
     <tr><th>Median</th><td>{{ pct(report.net.median_return) }}</td></tr>
@@ -21,6 +26,22 @@
   </tbody>
 </table>
 {% endif %}
+{% if report.data_quality %}
+<h2>Data Quality</h2>
+<table>
+  <tbody>
+  {% for name, grade in report.data_quality.items() %}
+  <tr><th>{{ name }}</th><td>{{ grade }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% if report.dataset %}
+<p>Dataset {{ report.dataset.dataset }} · {{ report.dataset.quality }}</p>
+{% if report.dataset.point_in_time %}
+<p>Point in time · news {{ report.dataset.point_in_time.news }} · market {{ report.dataset.point_in_time.market }}</p>
+{% endif %}
+{% endif %}
 <h2>Train / Validation / OOS</h2>
 <table>
   <thead><tr><th>Window</th><th>Status</th><th>Samples</th><th>Avg net</th></tr></thead>
@@ -28,9 +49,9 @@
   {% for window in windows %}
   <tr>
     <td>{{ window.name }}</td>
-    <td>{{ window.status or "—" }}</td>
-    <td>{% if window.status == "INSUFFICIENT" %}—{% else %}{{ window.samples if window.samples is not none else "—" }}{% endif %}</td>
-    <td>{% if window.status == "INSUFFICIENT" %}—{% else %}{{ pct(window.avg_return) }}{% endif %}</td>
+    <td>{{ window.evidence_status or window.status or "—" }}</td>
+    <td>{% if window.evidence_status == "NO_DATA" %}—{% else %}{{ window.samples if window.samples is not none else "—" }}{% endif %}</td>
+    <td>{% if window.evidence_status == "NO_DATA" %}—{% else %}{{ pct(window.avg_return) }}{% endif %}</td>
   </tr>
   {% endfor %}
   </tbody>

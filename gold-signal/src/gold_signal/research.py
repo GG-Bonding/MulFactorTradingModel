@@ -34,9 +34,34 @@ RESEARCH_WINDOWS: tuple[tuple[str, str, str], ...] = (
     ("oos", "2026-01-01", "2026-09-30"),
 )
 
+# A completed replay is not proof. Only VALID may be labeled historical evidence.
+EVIDENCE_VALID_MIN_TRADES = 20
+
 
 def price_factor(code: str) -> str:
     return f"market.{code}.close"
+
+
+def evidence_grade(events: int, trades: int) -> str:
+    """Separate 'the run finished' from 'the sample can support a claim'."""
+    if events <= 0:
+        return "NO_DATA"
+    if trades <= 0:
+        return "NO_TRADES"
+    if trades < EVIDENCE_VALID_MIN_TRADES:
+        return "INSUFFICIENT"
+    return "VALID"
+
+
+def quality_by_series(events: list[EventRecord], observations: list[Observation]) -> dict[str, str]:
+    """One grade per series. Any reconstructed print keeps the series reconstructed."""
+    grouped: dict[str, set[str]] = {}
+    if events:
+        grouped["News"] = {event.quality or "RECONSTRUCTED" for event in events}
+    for row in observations:
+        grouped.setdefault(_series_label(row), set()).add(row.quality or "RECONSTRUCTED")
+    ordered = ["News", *sorted(name for name in grouped if name != "News")]
+    return {name: _collapse_quality(grouped[name]) for name in ordered if name in grouped}
 
 
 def series_code(factor: str) -> str:
@@ -62,6 +87,7 @@ def observations_from_bars(
     symbol: str,
     source: str,
     timestamp_kind: str,
+    quality: str = "RECONSTRUCTED",
 ) -> list[Observation]:
     """A 1-minute close is knowable when that minute has finished.
 
@@ -82,6 +108,7 @@ def observations_from_bars(
                 ingested_at=knowable,
                 source=source,
                 symbol=symbol,
+                quality=quality,
             )
         )
     return rows
@@ -136,7 +163,9 @@ def replay_report(
     costs = costs or CostModel()
     missing = _coverage_gaps(spec, events, observations)
     report = _empty_report(spec, start, end, strategy_path, costs, missing)
+    report["data_quality"] = quality_by_series(events, observations)
     if missing:
+        _apply_grade(report, 0, 0, failed=True)
         return report
     start_at = _bound(start, end=False)
     end_at = _bound(end, end=True)
@@ -176,6 +205,7 @@ def load_archive(path: Path) -> tuple[list[EventRecord], list[Observation]]:
                     title=str(row.get("title") or ""),
                     content=str(row.get("content") or row.get("title") or ""),
                     source=str(row.get("source") or ""),
+                    quality=str(row.get("quality") or "RECONSTRUCTED"),
                 )
             )
         elif kind == "observation":
@@ -188,6 +218,7 @@ def load_archive(path: Path) -> tuple[list[EventRecord], list[Observation]]:
                     ingested_at=_parse_optional_stamp(row.get("ingested_at")),
                     source=str(row.get("source") or ""),
                     symbol=row.get("symbol"),
+                    quality=str(row.get("quality") or "RECONSTRUCTED"),
                 )
             )
     return events, observations
@@ -319,7 +350,11 @@ def _empty_report(
         "classifier_version": CLASSIFIER_VERSION,
         "start": start,
         "end": end,
-        "status": "INSUFFICIENT" if missing else "OK",
+        "run_status": "FAILED" if missing else "COMPLETED",
+        "evidence_status": "NO_DATA",
+        "status": "NO_DATA",
+        "events": 0,
+        "trades": 0,
         "samples": 0,
         "counts": {"events": 0, "waiting": 0, "flat": 0, "long": 0, "short": 0},
         "horizon": HEADLINE_HORIZON,
@@ -334,11 +369,14 @@ def _empty_report(
             name: {
                 "start": window_start,
                 "end": window_end,
-                "status": "INSUFFICIENT",
+                "run_status": "FAILED" if missing else "COMPLETED",
+                "evidence_status": "NO_DATA",
+                "status": "NO_DATA",
                 "samples": 0,
                 "expectancy": None,
                 "median_return": None,
                 "profit_factor": None,
+                "avg_return": None,
             }
             for name, window_start, window_end in RESEARCH_WINDOWS
         },
@@ -369,7 +407,8 @@ def _fill_report(
     report["samples"] = headline["samples"]
     report["win_rate"] = headline["win_rate"]
     report["avg_return"] = headline["avg_return"]
-    report["status"] = "OK"
+    trades = counts["long"] + counts["short"]
+    _apply_grade(report, counts["events"], trades, failed=False)
     report["costs"] = {
         "spread_cost": costs.spread_cost,
         "slippage_cost": costs.slippage_cost,
@@ -397,28 +436,20 @@ def _window_report(
             if decision.side in ("LONG", "SHORT") and HEADLINE_HORIZON in outcomes
         ]
     )
-    if not chosen:
-        return {
-            "start": start,
-            "end": end,
-            "status": "INSUFFICIENT",
-            "samples": 0,
-            "counts": counts,
-            "expectancy": None,
-            "median_return": None,
-            "profit_factor": None,
-            "avg_return": None,
-        }
+    trades = counts["long"] + counts["short"]
+    grade = evidence_grade(counts["events"], trades)
     return {
         "start": start,
         "end": end,
-        "status": "OK",
-        "samples": headline["samples"],
+        "run_status": "COMPLETED",
+        "evidence_status": grade,
+        "status": grade,
+        "samples": 0 if not chosen else headline["samples"],
         "counts": counts,
-        "expectancy": headline["expectancy"],
-        "median_return": headline["median_return"],
-        "profit_factor": headline["profit_factor"],
-        "avg_return": headline["avg_return"],
+        "expectancy": None if not chosen else headline["expectancy"],
+        "median_return": None if not chosen else headline["median_return"],
+        "profit_factor": None if not chosen else headline["profit_factor"],
+        "avg_return": None if not chosen else headline["avg_return"],
     }
 
 
@@ -455,6 +486,31 @@ def _percentile(values: list[float], pct: float) -> float:
 
 def _mean(values: list[float]) -> float:
     return sum(values) / len(values)
+
+
+def _apply_grade(report: dict, events: int, trades: int, *, failed: bool) -> None:
+    report["events"] = events
+    report["trades"] = trades
+    report["run_status"] = "FAILED" if failed else "COMPLETED"
+    report["evidence_status"] = "NO_DATA" if failed else evidence_grade(events, trades)
+    report["status"] = report["evidence_status"]
+
+
+def _series_label(row: Observation) -> str:
+    if row.symbol:
+        return row.symbol
+    parts = row.factor.split(".")
+    if len(parts) >= 2 and parts[0] == "market":
+        return parts[1]
+    return parts[0]
+
+
+def _collapse_quality(grades: set[str]) -> str:
+    if "RECONSTRUCTED" in grades or not grades:
+        return "RECONSTRUCTED"
+    if grades == {"VERIFIED"}:
+        return "VERIFIED"
+    return "RECONSTRUCTED"
 
 
 def _event_text(event: EventRecord) -> str:

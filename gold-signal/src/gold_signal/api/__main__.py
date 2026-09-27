@@ -15,8 +15,8 @@ def main() -> None:
     store = ProductStore(db)
     from gold_signal.ingest import start_live_feed
 
-    start_live_feed(store)
-    uvicorn.run(create_app(store), host=host, port=port)
+    loop = start_live_feed(store)
+    uvicorn.run(create_app(store, feed=None if loop is None else loop.health), host=host, port=port)
 
 
 if __name__ == "__main__":

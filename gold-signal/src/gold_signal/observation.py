@@ -15,6 +15,7 @@ class Observation:
     ingested_at: datetime | None
     source: str
     symbol: str | None = None
+    quality: str = "RECONSTRUCTED"
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class EventRecord:
     title: str
     content: str
     source: str
+    quality: str = "RECONSTRUCTED"
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,7 @@ def record_live_tick(
                 "ingested_at": ingested_at,
                 "source": source,
                 "symbol": code,
+                "quality": "VERIFIED",
             },
         )
     if news is None:
@@ -141,6 +144,7 @@ def record_live_tick(
             "event_type": event_type,
             "classifier_version": classifier_version,
             "source": "jin10",
+            "quality": "VERIFIED",
         },
     )
 

@@ -59,9 +59,10 @@ class TickIn(BaseModel):
     event: EventIn | None = None
 
 
-def create_app(store: ProductStore) -> FastAPI:
+def create_app(store: ProductStore, feed: object | None = None) -> FastAPI:
     app = FastAPI(title="Trading Agent API")
     app.state.store = store
+    app.state.feed = feed
     _install_guards(app)
 
     @app.get("/healthz")
@@ -71,7 +72,21 @@ def create_app(store: ProductStore) -> FastAPI:
     @app.get("/readyz")
     def readyz() -> dict:
         store.ping()
-        return {"status": "ready"}
+        health = getattr(app.state, "feed", None)
+        ingest = health.snapshot() if health is not None and hasattr(health, "snapshot") else {
+            "ingest": "OFF",
+            "last_market_at": None,
+            "last_news_at": None,
+            "last_error": None,
+        }
+        return {
+            "status": "ready",
+            "database": "READY",
+            "ingest": ingest["ingest"],
+            "last_market_at": ingest.get("last_market_at"),
+            "last_news_at": ingest.get("last_news_at"),
+            "last_error": ingest.get("last_error"),
+        }
 
     @app.post("/api/agents/compile")
     def compile_agent(body: IdeaIn) -> dict:
@@ -202,7 +217,9 @@ def create_app(store: ProductStore) -> FastAPI:
         paper_nets = [row["net_return"] for row in trades_rows if row["net_return"] is not None]
         paper_avg = None if not paper_nets else sum(paper_nets) / len(paper_nets)
         return {
-            "backtest_status": None if latest is None else latest.get("status"),
+            "run_status": None if latest is None else latest.get("run_status"),
+            "evidence_status": None if latest is None else latest.get("evidence_status"),
+            "backtest_status": None if latest is None else latest.get("evidence_status"),
             "samples": None if latest is None else latest.get("samples"),
             "avg_net": net.get("avg_return"),
             "median_net": net.get("median_return"),
