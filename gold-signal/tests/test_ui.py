@@ -32,6 +32,8 @@ def test_pages_walk_compile_backtest_paper_and_keep_v1(tmp_path):
     assert "INSUFFICIENT" in backtest.text
     assert "RECONSTRUCTED" in backtest.text
     assert "Events" in backtest.text
+    assert "Filled trades" in backtest.text
+    assert "Threshold sweep" in backtest.text
     assert "oos" in backtest.text
     home = client.get(agent_url)
     assert "BACKTESTED" in home.text
@@ -86,6 +88,7 @@ def test_zero_trade_backtest_is_not_evidence_and_cannot_paper(tmp_path):
     agent_url = created.headers["location"]
     backtest = client.post(agent_url + "/backtest", follow_redirects=True)
     assert "NO_TRADES" in backtest.text
+    assert "Rejected events" in backtest.text
     assert "COMPLETED" in backtest.text
     assert "Historical Evidence Available" not in backtest.text
     assert "RECONSTRUCTED" in backtest.text

@@ -53,9 +53,10 @@
   </tbody>
 </table>
 {% endif %}
-{% if report.traces %}
-<h2>Events</h2>
-{% for trace in report.traces %}
+{% for group in trace_groups %}
+{% if group.rows %}
+<h2>{{ group.name }}</h2>
+{% for trace in group.rows %}
 <p><strong>{{ trace.published_at }}</strong> {{ trace.title }}</p>
 <p>Decision {{ trace.side }}{% if trace.entry_price is not none %} · Entry {{ trace.entry_price }}{% endif %}{% if trace.exit_reason %} · Exit {{ trace.exit_reason }} {{ trace.exit_price }}{% endif %}{% if trace.skipped_open_position %} · Skipped, previous position still open{% endif %}</p>
 {% if trace.reasons %}<p>{{ trace.reasons | join(" · ") }}</p>{% endif %}
@@ -77,6 +78,23 @@
 </table>
 {% endif %}
 {% endfor %}
+{% endif %}
+{% endfor %}
+{% if sweep %}
+<h2>Threshold sweep</h2>
+<table>
+  <thead><tr><th>Threshold</th><th>Trades</th><th>Avg net</th><th>End equity</th></tr></thead>
+  <tbody>
+  {% for row in sweep %}
+  <tr>
+    <td>{{ pct(row.threshold) }}</td>
+    <td>{{ row.trades }}</td>
+    <td>{{ pct(row.avg_return) }}</td>
+    <td>{{ row.end_equity if row.end_equity is not none else "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
 {% endif %}
 {% if report.walk_forward %}
 <h2>Walk forward</h2>

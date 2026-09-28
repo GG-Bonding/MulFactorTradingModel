@@ -11,7 +11,14 @@ from fastapi.templating import Jinja2Templates
 from gold_signal.compiler import compile_idea, render_hypothesis
 from gold_signal.domain.models import TransitionError
 from gold_signal.hypothesis import parse_hypothesis
-from gold_signal.research import EVIDENCE_VALID_MIN_TRADES, changed_confirmations, compare_reports, evidence_grade
+from gold_signal.archive import default_archive, factors_for
+from gold_signal.research import (
+    EVIDENCE_VALID_MIN_TRADES,
+    changed_confirmations,
+    compare_reports,
+    evidence_grade,
+    sweep_reaction_threshold,
+)
 from gold_signal.observation import EventRecord, Observation
 from gold_signal.persistence.service import (
     add_hypothesis_version,
@@ -185,6 +192,8 @@ def mount_ui(app: FastAPI) -> None:
                 "windows": _windows(report),
                 "min_trades": EVIDENCE_VALID_MIN_TRADES,
                 "feed": _feed_view(request),
+                "trace_groups": _trace_groups(report),
+                "sweep": _threshold_sweep(store, run),
             },
         )
 
@@ -233,6 +242,45 @@ def _detail_context(store, agent, error: str | None, request: Request) -> dict:
         "feed": _feed_view(request),
         "comparison": _version_comparison(store, agent),
     }
+
+
+def _trace_groups(report: dict | None) -> list[dict]:
+    traces = [] if not report else report.get("traces") or []
+    filled, rejected, waiting = [], [], []
+    for trace in traces:
+        side = trace.get("side")
+        if side in ("LONG", "SHORT"):
+            filled.append(trace)
+        elif side == "WAITING":
+            waiting.append(trace)
+        else:
+            rejected.append(trace)
+    return [
+        {"name": "Filled trades", "rows": filled},
+        {"name": "Rejected events", "rows": rejected},
+        {"name": "Waiting", "rows": waiting},
+    ]
+
+
+def _threshold_sweep(store, run: dict) -> list[dict]:
+    version = store.get_version(run["version_id"])
+    if version is None:
+        return []
+    spec = parse_hypothesis(version.hypothesis_yaml)
+    if spec.drive == "BAR" or not any(
+        condition.factor.endswith(("reaction_1bar", "reaction_1m")) and condition.value is not None
+        for condition in spec.confirmations
+    ):
+        return []
+    report = run["report"]
+    start = str(report.get("start") or "2024-01-01")
+    end = str(report.get("end") or "2026-09-30")
+    start_at = datetime.fromisoformat(start[:10]).replace(tzinfo=timezone.utc)
+    end_at = datetime.fromisoformat(end[:10]).replace(tzinfo=timezone.utc) + timedelta(days=1)
+    events, observations, gaps = default_archive().load(start_at, end_at, factors_for(spec))
+    if gaps:
+        return []
+    return sweep_reaction_threshold(spec, events, observations, (0.0004, 0.0008, 0.0012), start, end)
 
 
 def _version_comparison(store, agent) -> dict | None:
