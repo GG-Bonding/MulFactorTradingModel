@@ -88,6 +88,32 @@ def test_a_skipped_bar_is_not_called_a_one_bar_reaction():
     assert reaction is None
 
 
+def test_packaged_archive_includes_later_refinery_strikes():
+    from datetime import timezone as tz
+
+    from gold_signal.archive import default_archive
+
+    start = datetime(2026, 9, 1, tzinfo=tz.utc)
+    end = datetime(2026, 9, 29, tzinfo=tz.utc)
+    events, observations, _missing = default_archive().load(start, end, ["market.XAUUSD.close"])
+    titles = " ".join(event.title for event in events)
+    assert "非农" in titles
+    assert "炼油厂" in titles
+    assert "油库" in titles
+    sina = [row for row in observations if row.source == "sina"]
+    assert sina
+    assert all(row.quality == "RECONSTRUCTED" for row in sina)
+    published = next(event.published_at for event in events if "炼油厂" in event.title)
+    reaction = reaction_1bar(
+        FactorResolver(observations),
+        "market.XAUUSD.close",
+        published,
+        published + timedelta(minutes=3),
+    )
+    assert reaction is not None
+    assert reaction.span == timedelta(minutes=1)
+
+
 def test_packaged_yahoo_opens_become_close_knowable_times():
     from datetime import timezone as tz
 

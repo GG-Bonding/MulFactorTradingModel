@@ -30,7 +30,7 @@ def test_restart_keeps_v1_backtest_signal_and_trade(tmp_path):
     assert backtest["version_id"] == version.id
     assert backtest["report"]["run_status"] == "COMPLETED"
     assert backtest["report"]["evidence_status"] == "NO_TRADES"
-    assert backtest["report"]["counts"]["events"] == 1
+    assert backtest["report"]["counts"]["events"] == 3
     assert backtest["report"]["trades"] == 0
     assert backtest["report"]["data_quality"]["News"] == "RECONSTRUCTED"
     assert backtest["report"]["windows"]["oos"]["evidence_status"] == "NO_TRADES"
