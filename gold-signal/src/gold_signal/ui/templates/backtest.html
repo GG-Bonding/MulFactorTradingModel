@@ -42,11 +42,22 @@
 <p>Point in time · news {{ report.dataset.point_in_time.news }} · market {{ report.dataset.point_in_time.market }}</p>
 {% endif %}
 {% endif %}
+{% if report.portfolio %}
+<h2>Portfolio</h2>
+<table>
+  <tbody>
+    <tr><th>Start equity</th><td>{{ report.portfolio.start_equity }}</td></tr>
+    <tr><th>End equity</th><td>{{ report.portfolio.end_equity }}</td></tr>
+    <tr><th>Executed</th><td>{{ report.portfolio.executed }}</td></tr>
+    <tr><th>Skipped while open</th><td>{{ report.portfolio.skipped }}</td></tr>
+  </tbody>
+</table>
+{% endif %}
 {% if report.traces %}
 <h2>Events</h2>
 {% for trace in report.traces %}
 <p><strong>{{ trace.published_at }}</strong> {{ trace.title }}</p>
-<p>Decision {{ trace.side }}{% if trace.entry_price is not none %} · Entry {{ trace.entry_price }}{% endif %}</p>
+<p>Decision {{ trace.side }}{% if trace.entry_price is not none %} · Entry {{ trace.entry_price }}{% endif %}{% if trace.exit_reason %} · Exit {{ trace.exit_reason }} {{ trace.exit_price }}{% endif %}</p>
 {% if trace.reasons %}<p>{{ trace.reasons | join(" · ") }}</p>{% endif %}
 {% if trace.reactions %}
 <table>

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from gold_signal.market import event_reaction
 from gold_signal.models import FlashNews, MarketSnapshot
+from gold_signal.execution import ExitPolicy
 from gold_signal.replay_clock import CostModel
 from gold_signal.transmission import apply_transmission
 
@@ -34,6 +35,7 @@ class HypothesisSpec:
     confirmations: tuple[Condition, ...]
     notes: tuple[str, ...] = ()
     trigger: str = ""
+    exit: ExitPolicy = ExitPolicy()
 
 
 _TRIGGERS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -79,6 +81,27 @@ class HypothesisDecision:
     missing: list[str] = field(default_factory=list)
 
 
+def _exit_policy(data: dict[str, object]) -> ExitPolicy:
+    return ExitPolicy(
+        max_hold=_hold(str(data.get("exit_max_hold") or "5m")),
+        take_profit=_optional_float(data.get("exit_take_profit")),
+        stop_loss=_optional_float(data.get("exit_stop_loss")),
+    )
+
+
+def _hold(text: str) -> timedelta:
+    match = re.fullmatch(r"(\d+)m", text.strip())
+    if match is None:
+        raise ValueError(f"unsupported hold {text}")
+    return timedelta(minutes=int(match.group(1)))
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
 def load_hypothesis(path: Path) -> HypothesisSpec:
     return parse_hypothesis(path.read_text(encoding="utf-8"))
 
@@ -120,6 +143,10 @@ def parse_hypothesis(text: str) -> HypothesisSpec:
             if key == "event" and value:
                 data["trigger"] = value
             continue
+        if mode == "exit" and indent >= 2 and ":" in line:
+            key, value = _split_kv(line)
+            data[f"exit_{key}"] = value
+            continue
         if line.startswith("- ") and mode == "confirmations":
             flush()
             pending = {}
@@ -154,6 +181,7 @@ def parse_hypothesis(text: str) -> HypothesisSpec:
         confirmations=tuple(confirmations),
         notes=tuple(notes),
         trigger=str(data.get("trigger") or ""),
+        exit=_exit_policy(data),
     )
 
 

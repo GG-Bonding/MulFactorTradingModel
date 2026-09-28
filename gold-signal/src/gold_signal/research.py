@@ -7,6 +7,7 @@ from bisect import bisect_left
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from gold_signal.execution import ClosedTrade, portfolio_result, simulate_trade
 from gold_signal.hypothesis import HypothesisSpec
 from gold_signal.models import Bar
 from gold_signal.news import CLASSIFIER_VERSION
@@ -179,7 +180,17 @@ def replay_report(
     selected.sort(key=lambda event: (_utc(event.published_at), event.event_id))
     rows = [_played(spec, event, observations, costs) for event in selected]
     _fill_report(report, rows, costs)
-    report["traces"] = [_event_trace(spec, event, decision, outcomes, observations) for event, decision, outcomes in rows]
+    resolver = FactorResolver(observations)
+    bars = resolver.series(price_factor(spec.asset))
+    closed: list[ClosedTrade] = []
+    traces = []
+    for event, decision, outcomes in rows:
+        trade = simulate_trade(decision, spec.asset, bars, spec.exit, costs)
+        if trade is not None:
+            closed.append(trade)
+        traces.append(_event_trace(spec, event, decision, outcomes, observations, trade))
+    report["traces"] = traces
+    report["portfolio"] = portfolio_result(closed)
     report["windows"] = {
         name: _window_report(rows, window_start, window_end)
         for name, window_start, window_end in RESEARCH_WINDOWS
@@ -270,6 +281,7 @@ def _event_trace(
     decision: DecisionRecord,
     outcomes: dict[str, TradeOutcome],
     observations: list[Observation],
+    trade: ClosedTrade | None = None,
 ) -> dict:
     """What the clock could see for one event. A reaction names the two closes it used."""
     resolver = FactorResolver(observations)
@@ -309,6 +321,10 @@ def _event_trace(
         "entry_price": decision.entry_price,
         "reactions": reactions,
         "horizons": horizon_rows,
+        "exit_reason": None if trade is None else trade.exit_reason,
+        "exit_at": None if trade is None else trade.exit_at.isoformat(),
+        "exit_price": None if trade is None else trade.exit_price,
+        "net_return": None if trade is None else trade.net_return,
     }
 
 
@@ -430,6 +446,7 @@ def _empty_report(
         },
         "missing": missing,
         "traces": [],
+        "portfolio": {"start_equity": 1.0, "end_equity": 1.0, "executed": 0, "skipped": 0, "curve": [{"at": None, "equity": 1.0}]},
         "win_rate": None,
         "avg_return": None,
     }

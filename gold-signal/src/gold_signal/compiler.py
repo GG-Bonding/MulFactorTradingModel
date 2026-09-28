@@ -131,6 +131,12 @@ def render_hypothesis(spec: HypothesisSpec) -> str:
             lines.append(f"    operator: {condition.operator}")
         if condition.value is not None:
             lines.append(f"    value: {_format_value(condition.value)}")
+    lines.append("exit:")
+    lines.append(f"  max_hold: {int(spec.exit.max_hold.total_seconds() // 60)}m")
+    if spec.exit.take_profit is not None:
+        lines.append(f"  take_profit: {_format_value(spec.exit.take_profit)}")
+    if spec.exit.stop_loss is not None:
+        lines.append(f"  stop_loss: {_format_value(spec.exit.stop_loss)}")
     return "\n".join(lines) + "\n"
 
 
@@ -155,6 +161,7 @@ def _same_spec(left: HypothesisSpec, right: HypothesisSpec) -> bool:
         and left.trigger == right.trigger
         and left.horizons == right.horizons
         and left.confirmations == right.confirmations
+        and left.exit == right.exit
     )
 
 
