@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from gold_signal.hypothesis import HypothesisSpec
@@ -25,6 +26,8 @@ class HistoricalArchive:
         factors: list[str],
     ) -> tuple[list[EventRecord], list[Observation], list[str]]:
         events, observations = load_archive(self.path)
+        if self.manifest().get("bar_timestamp") == "open":
+            observations = [_close_knowable(row) for row in observations]
         events = [event for event in events if start <= event.published_at < end]
         observations = [
             row
@@ -50,6 +53,12 @@ def default_archive() -> HistoricalArchive:
     configured = os.environ.get("AGENT_ARCHIVE")
     path = Path(configured) if configured else PACKAGED_ARCHIVE
     return HistoricalArchive(path)
+
+
+def _close_knowable(row: Observation) -> Observation:
+    """Yahoo stamps the minute open. The close can be used one minute later."""
+    shift = timedelta(minutes=1)
+    return replace(row, observed_at=row.observed_at + shift, available_at=row.available_at + shift)
 
 
 def _read_manifest(path: Path) -> dict:

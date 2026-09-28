@@ -69,8 +69,8 @@ def test_cpi_sentence_compiles_to_an_editable_spec():
     factors = [(item.factor, item.operator, item.value) for item in spec.confirmations]
     assert factors == [
         ("DFII10.change", "<", 0.0),
-        ("XAUUSD.reaction_1m", ">", 0.0008),
-        ("XAGUSD.reaction_1m", ">", 0.0008),
+        ("XAUUSD.reaction_1bar", ">", 0.0008),
+        ("XAGUSD.reaction_1bar", ">", 0.0008),
     ]
     edited = first.yaml.replace("0.0008", "0.05", 1)
     changed = parse_hypothesis(edited)
@@ -162,8 +162,8 @@ def test_agent_card_names_the_conditions_and_compares_paper():
     assert all(row["passed"] for row in view["conditions"])
     labels = " ".join(row["label"] for row in view["conditions"])
     assert "非农低于预期" in labels
-    assert "XAUUSD.reaction_1m" in labels
-    assert "XAGUSD.reaction_1m" in labels
+    assert "XAUUSD.reaction_1bar" in labels
+    assert "XAGUSD.reaction_1bar" in labels
     assert view["comparison"]["historical_samples"] == 1
     assert view["comparison"]["historical_avg_net"] is not None
     assert view["comparison"]["paper_samples"] == 2

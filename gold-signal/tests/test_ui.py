@@ -14,7 +14,7 @@ def test_pages_walk_compile_backtest_paper_and_keep_v1(tmp_path):
     preview = client.post("/agents/new", data={"idea": SHORT, "action": "preview"})
     assert preview.status_code == 200
     assert "NFP_ABOVE_EXPECTATION" in preview.text
-    assert "XAUUSD.reaction_1m" in preview.text
+    assert "XAUUSD.reaction_1bar" in preview.text
     refused = client.post("/agents/new", data={"idea": "今天天气不错", "action": "create"})
     assert refused.status_code == 400
     created = client.post("/agents/new", data={"idea": SHORT, "action": "create"}, follow_redirects=False)

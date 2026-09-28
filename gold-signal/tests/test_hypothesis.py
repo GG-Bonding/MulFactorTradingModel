@@ -19,7 +19,7 @@ entry: FOLLOW_NEWS
 horizons:
   - 1m
 confirmations:
-  - factor: XAUUSD.reaction_1m
+  - factor: XAUUSD.reaction_1bar
     operator: same_sign_abs_gte
     value: 0.0008
 """
@@ -48,7 +48,7 @@ asset: XAUUSD
 family: metal
 entry: FOLLOW_NEWS
 confirmations:
-  - factor: USOIL.reaction_1m
+  - factor: USOIL.reaction_1bar
     operator: ">"
     value: 0.0015
   - factor: DFII10.change
@@ -65,4 +65,4 @@ confirmations:
     joined = " ".join(report["missing"])
     assert "news archive" in joined
     assert "DFII10" in joined
-    assert "USOIL.reaction_1m" in joined
+    assert "USOIL.reaction_1bar" in joined

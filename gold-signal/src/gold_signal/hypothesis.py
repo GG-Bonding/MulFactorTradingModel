@@ -269,7 +269,9 @@ def _factor_values(
         (market.eurusd.code, market.eurusd_bars),
     ):
         reaction = event_reaction(bars, published, now)
-        values[f"{code}.reaction_1m"] = None if reaction is None else reaction.return_1m
+        change = None if reaction is None else reaction.return_1m
+        values[f"{code}.reaction_1m"] = change
+        values[f"{code}.reaction_1bar"] = change
     return values
 
 

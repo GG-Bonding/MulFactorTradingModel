@@ -166,7 +166,7 @@ def test_missing_confirmation_series_refuses_the_sample():
     assert report["evidence_status"] == "NO_DATA"
     assert report["samples"] == 0
     assert report["win_rate"] is None
-    assert any("EURUSD.reaction_1m" in item for item in report["missing"])
+    assert any("EURUSD.reaction_1bar" in item for item in report["missing"])
 
 
 def test_replay_report_is_deterministic_and_splits_windows():

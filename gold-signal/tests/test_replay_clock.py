@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from gold_signal.observation import CoverageEntry, CoverageManifest, EventRecord, Observation, Recorder
-from gold_signal.replay_clock import coverage_status, replay_gold_confirmation
+from gold_signal.observation import CoverageEntry, CoverageManifest, EventRecord, FactorResolver, Observation, Recorder
+from gold_signal.replay_clock import coverage_status, reaction_1bar, replay_gold_confirmation
 
 
 def _utc(hour: int, minute: int, second: int = 0) -> datetime:
@@ -55,9 +55,65 @@ def test_replay_is_deterministic():
     assert first == second
 
 
-def test_future_print_is_invisible():
-    from gold_signal.observation import FactorResolver
+def test_off_grid_news_uses_one_completed_bar_not_the_bar_after_next():
+    published = datetime(2026, 9, 4, 12, 30, 17, tzinfo=timezone.utc)
+    prices = [
+        Observation("market.XAUUSD.close", 4518.9, _stamp(12, 30), _stamp(12, 30), _stamp(12, 30), "yahoo", "XAUUSD"),
+        Observation("market.XAUUSD.close", 4517.7, _stamp(12, 31), _stamp(12, 31), _stamp(12, 31), "yahoo", "XAUUSD"),
+        Observation("market.XAUUSD.close", 4448.6, _stamp(12, 32), _stamp(12, 32), _stamp(12, 32), "yahoo", "XAUUSD"),
+    ]
+    resolver = FactorResolver(prices)
+    early = reaction_1bar(resolver, "market.XAUUSD.close", published, _stamp(12, 30, 59))
+    reaction = reaction_1bar(resolver, "market.XAUUSD.close", published, published + timedelta(minutes=1))
+    assert early is None
+    assert reaction is not None
+    assert reaction.anchor_at == _stamp(12, 30)
+    assert reaction.later_at == _stamp(12, 31)
+    assert reaction.span == timedelta(minutes=1)
+    assert abs(reaction.value - (4517.7 / 4518.9 - 1)) < 1e-12
 
+
+def test_a_skipped_bar_is_not_called_a_one_bar_reaction():
+    published = datetime(2026, 9, 4, 12, 30, 17, tzinfo=timezone.utc)
+    prices = [
+        Observation("market.XAUUSD.close", 4518.9, _stamp(12, 30), _stamp(12, 30), _stamp(12, 30), "yahoo", "XAUUSD"),
+        Observation("market.XAUUSD.close", 4448.6, _stamp(12, 32), _stamp(12, 32), _stamp(12, 32), "yahoo", "XAUUSD"),
+    ]
+    reaction = reaction_1bar(
+        FactorResolver(prices),
+        "market.XAUUSD.close",
+        published,
+        _stamp(12, 33),
+    )
+    assert reaction is None
+
+
+def test_packaged_yahoo_opens_become_close_knowable_times():
+    from datetime import timezone as tz
+
+    from gold_signal.archive import default_archive
+
+    start = datetime(2026, 9, 4, tzinfo=tz.utc)
+    end = datetime(2026, 9, 5, tzinfo=tz.utc)
+    events, observations, _missing = default_archive().load(start, end, ["market.XAUUSD.close"])
+    published = events[0].published_at
+    reaction = reaction_1bar(
+        FactorResolver(observations),
+        "market.XAUUSD.close",
+        published,
+        published + timedelta(minutes=3),
+    )
+    assert default_archive().manifest()["bar_timestamp"] == "open"
+    assert reaction is not None
+    assert reaction.span == timedelta(minutes=1)
+    assert reaction.anchor_at <= published < reaction.later_at
+
+
+def _stamp(hour: int, minute: int, second: int = 0) -> datetime:
+    return datetime(2026, 9, 4, hour, minute, second, tzinfo=timezone.utc)
+
+
+def test_future_print_is_invisible():
     _event, prices = _tape()
     resolver = FactorResolver(prices)
     hidden = resolver.price_at("market.XAUUSD.close", _utc(14, 31), _utc(14, 30, 59))

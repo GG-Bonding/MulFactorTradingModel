@@ -295,7 +295,9 @@ def _windows(report: dict | None) -> list[dict]:
 def _with_threshold(yaml: str, value: float) -> str:
     spec = parse_hypothesis(yaml)
     confirmations = tuple(
-        replace(item, value=value) if item.factor.endswith("reaction_1m") and item.value is not None else item
+        replace(item, value=value)
+        if item.factor.endswith(("reaction_1m", "reaction_1bar")) and item.value is not None
+        else item
         for item in spec.confirmations
     )
     return render_hypothesis(replace(spec, confirmations=confirmations))

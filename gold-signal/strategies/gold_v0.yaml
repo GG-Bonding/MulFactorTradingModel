@@ -8,10 +8,10 @@ horizons:
   - 3m
   - 5m
 confirmations:
-  - factor: XAUUSD.reaction_1m
+  - factor: XAUUSD.reaction_1bar
     operator: same_sign_abs_gte
     value: 0.0008
-  - factor: XAGUSD.reaction_1m
+  - factor: XAGUSD.reaction_1bar
     operator: same_sign
-  - factor: EURUSD.reaction_1m
+  - factor: EURUSD.reaction_1bar
     operator: same_sign

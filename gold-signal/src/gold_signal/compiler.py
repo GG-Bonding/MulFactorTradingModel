@@ -21,10 +21,10 @@ _ASSETS: tuple[tuple[str, str, str], ...] = (
 
 _FACTOR_ORDER = (
     "DFII10.change",
-    "XAUUSD.reaction_1m",
-    "XAGUSD.reaction_1m",
-    "EURUSD.reaction_1m",
-    "USOIL.reaction_1m",
+    "XAUUSD.reaction_1bar",
+    "XAGUSD.reaction_1bar",
+    "EURUSD.reaction_1bar",
+    "USOIL.reaction_1bar",
 )
 
 _OPERATORS = {"same_sign", "same_sign_abs_gte", ">", ">=", "<", "<="}
@@ -196,7 +196,7 @@ def _confirmations(text: str) -> tuple[Condition, ...]:
             threshold = Thresholds.RETURN_1M
         for label, code, _family in _ASSETS:
             if label in clause or label.lower() in clause.lower():
-                found[f"{code}.reaction_1m"] = Condition(f"{code}.reaction_1m", operator, threshold)
+                found[f"{code}.reaction_1bar"] = Condition(f"{code}.reaction_1bar", operator, threshold)
     ordered = [found[factor] for factor in _FACTOR_ORDER if factor in found]
     return tuple(ordered)
 

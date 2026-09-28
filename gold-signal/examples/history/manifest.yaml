@@ -6,3 +6,5 @@ sources:
 point_in_time:
   news: partial
   market: reconstructed
+bar_timestamp: open
+reaction: 1bar

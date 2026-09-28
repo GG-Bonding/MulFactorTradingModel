@@ -117,15 +117,42 @@ def measure_outcome(
     )
 
 
-def reaction_1m(resolver: FactorResolver, factor: str, published_at: datetime, now: datetime) -> float | None:
-    """First close knowable at or after the one-minute mark, never a print from before it."""
+@dataclass(frozen=True)
+class BarReaction:
+    """One completed minute bar. This is not a 60-second return from the headline."""
+
+    value: float
+    anchor_at: datetime
+    later_at: datetime
+
+    @property
+    def span(self) -> timedelta:
+        return self.later_at - self.anchor_at
+
+
+def reaction_1bar(
+    resolver: FactorResolver,
+    factor: str,
+    published_at: datetime,
+    now: datetime,
+) -> BarReaction | None:
+    """Last close knowable at the headline, then the next close exactly one minute later.
+
+    A minute bar cannot price 12:30:17. The anchor is the last close with
+    observed_at <= published_at. The follow-up must land on anchor + 1 minute.
+    A later print that skips that bar is not reported as a one-minute reaction.
+    """
     anchor = resolver.price_at(factor, published_at, now)
-    deadline = published_at + timedelta(minutes=1)
-    later_rows = [row for row in resolver.visible(factor, now) if row.observed_at >= deadline]
-    if anchor is None or not later_rows or anchor.value == 0:
+    if anchor is None or anchor.value == 0:
+        return None
+    target = anchor.observed_at + timedelta(minutes=1)
+    later_rows = [row for row in resolver.visible(factor, now) if row.observed_at >= target]
+    if not later_rows:
         return None
     later = later_rows[0]
-    return later.value / anchor.value - 1
+    if later.observed_at != target:
+        return None
+    return BarReaction(later.value / anchor.value - 1, anchor.observed_at, later.observed_at)
 
 
 def replay_gold_confirmation(
@@ -149,8 +176,8 @@ def replay_gold_confirmation(
         if now < event.available_at:
             rows.append((now, None, None))
             continue
-        change = reaction_1m(resolver, factor, event.published_at, now)
-        if change is None or change <= 0:
+        change = reaction_1bar(resolver, factor, event.published_at, now)
+        if change is None or change.value <= 0:
             rows.append((now, None, None))
             continue
         if decision is None:

@@ -15,7 +15,7 @@ from gold_signal.replay_clock import (
     DecisionRecord,
     TradeOutcome,
     measure_outcome,
-    reaction_1m,
+    reaction_1bar,
 )
 
 HORIZONS: tuple[tuple[str, timedelta], ...] = (
@@ -75,8 +75,9 @@ def confirmation_value(
     now: datetime,
 ) -> float | None:
     """Only a print that is already knowable can confirm. Unsafe factors stay empty."""
-    if factor.endswith(".reaction_1m"):
-        return reaction_1m(resolver, price_factor(series_code(factor)), published_at, now)
+    if factor.endswith(".reaction_1bar") or factor.endswith(".reaction_1m"):
+        reaction = reaction_1bar(resolver, price_factor(series_code(factor)), published_at, now)
+        return None if reaction is None else reaction.value
     return None
 
 
