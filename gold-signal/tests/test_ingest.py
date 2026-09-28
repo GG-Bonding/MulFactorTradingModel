@@ -44,7 +44,7 @@ def test_archive_backtest_and_feed_loop_and_new_version_needs_backtest(tmp_path)
     assert report["status"] == "COMPLETED"
     assert report["report"]["run_status"] == "COMPLETED"
     assert report["report"]["evidence_status"] == "INSUFFICIENT"
-    assert report["report"]["counts"]["events"] == 3
+    assert report["report"]["counts"]["events"] == 6
     assert report["report"]["counts"]["short"] == 1
     assert report["report"]["windows"]["oos"]["evidence_status"] == "INSUFFICIENT"
     assert report["report"]["dataset"]["quality"] == "RECONSTRUCTED"

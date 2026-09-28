@@ -100,6 +100,7 @@ def test_packaged_archive_includes_later_refinery_strikes():
     assert "非农" in titles
     assert "炼油厂" in titles
     assert "油库" in titles
+    assert "货船" in titles
     sina = [row for row in observations if row.source == "sina"]
     assert sina
     assert all(row.quality == "RECONSTRUCTED" for row in sina)

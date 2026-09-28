@@ -43,7 +43,7 @@ def test_v1_path_freezes_evidence_paper_and_the_next_draft(tmp_path):
         body = backtest.json()["report"]
         assert body["run_status"] == "COMPLETED"
         assert body["evidence_status"] == "INSUFFICIENT"
-        assert body["events"] == 3
+        assert body["events"] == 6
         assert body["trades"] == 1
         assert "Historical Evidence Available" not in str(body["evidence_status"])
 
