@@ -64,6 +64,7 @@ def compile_idea(text: str) -> CompileResult:
         horizons=_DEFAULT_HORIZONS,
         confirmations=confirmations,
         trigger=triggers[0] if triggers else "",
+        drive="BAR" if re.search(r"每(天|日|根)", raw) else "EVENT",
     )
     return _accept(spec)
 
@@ -96,6 +97,9 @@ def compile_model_output(payload: dict) -> CompileResult:
         confirmations.append(parsed)
     if not trigger and not confirmations:
         return _refuse("没有触发事件，也没有确认条件")
+    drive = str(payload.get("drive") or "EVENT")
+    if drive not in ("EVENT", "BAR"):
+        return _refuse(f"未知驱动 {drive}")
     spec = HypothesisSpec(
         id=str(payload.get("id") or _spec_id(trigger or "model", asset, entry)),
         name=str(payload.get("name") or _spec_name(trigger, asset, entry)),
@@ -105,6 +109,7 @@ def compile_model_output(payload: dict) -> CompileResult:
         horizons=tuple(str(item) for item in horizons),
         confirmations=tuple(confirmations),
         trigger=trigger,
+        drive=drive,
     )
     return _accept(spec)
 
@@ -117,6 +122,8 @@ def render_hypothesis(spec: HypothesisSpec) -> str:
         f"family: {spec.family}",
         f"entry: {spec.entry}",
     ]
+    if spec.drive != "EVENT":
+        lines.append(f"drive: {spec.drive}")
     if spec.trigger:
         lines.append(f"trigger: {spec.trigger}")
     lines.append("horizons:")
@@ -162,6 +169,7 @@ def _same_spec(left: HypothesisSpec, right: HypothesisSpec) -> bool:
         and left.horizons == right.horizons
         and left.confirmations == right.confirmations
         and left.exit == right.exit
+        and left.drive == right.drive
     )
 
 

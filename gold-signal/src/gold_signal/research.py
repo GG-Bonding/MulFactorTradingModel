@@ -7,8 +7,8 @@ from bisect import bisect_left
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from gold_signal.execution import ClosedTrade, portfolio_result, simulate_trade
-from gold_signal.hypothesis import HypothesisSpec
+from gold_signal.execution import ClosedTrade, execution_costs, portfolio_result, simulate_trade, walk_forward
+from gold_signal.hypothesis import HypothesisSpec, _check, resolve_direction
 from gold_signal.models import Bar
 from gold_signal.news import CLASSIFIER_VERSION
 from gold_signal.observation import EventRecord, FactorResolver, Observation
@@ -81,6 +81,17 @@ def confirmation_value(
         reaction = reaction_1bar(resolver, price_factor(series_code(factor)), published_at, now)
         return None if reaction is None else reaction.value
     return None
+
+
+def bar_step(resolver: FactorResolver, factor: str, bar_time: datetime, now: datetime):
+    """Return of the latest stored step ending at bar_time. The span is whatever the series actually is."""
+    from gold_signal.replay_clock import BarReaction
+
+    rows = [row for row in resolver.visible(factor, now) if row.observed_at <= bar_time]
+    if len(rows) < 2 or rows[-1].observed_at != bar_time or rows[-1].value == 0 or rows[-2].value == 0:
+        return None
+    anchor, later = rows[-2], rows[-1]
+    return BarReaction(later.value / anchor.value - 1, anchor.observed_at, later.observed_at)
 
 
 def observations_from_bars(
@@ -178,19 +189,23 @@ def replay_report(
         if start_at <= _utc(event.published_at) < end_at
     ]
     selected.sort(key=lambda event: (_utc(event.published_at), event.event_id))
-    rows = [_played(spec, event, observations, costs) for event in selected]
+    if spec.drive == "BAR":
+        rows = _bar_rows(spec, observations, start_at, end_at, costs)
+    else:
+        rows = [_played(spec, event, observations, costs) for event in selected]
     _fill_report(report, rows, costs)
     resolver = FactorResolver(observations)
     bars = resolver.series(price_factor(spec.asset))
     closed: list[ClosedTrade] = []
     traces = []
     for event, decision, outcomes in rows:
-        trade = simulate_trade(decision, spec.asset, bars, spec.exit, costs)
+        trade = simulate_trade(decision, spec.asset, bars, spec.exit, _fill_cost(spec, event, decision, observations, costs))
         if trade is not None:
             closed.append(trade)
         traces.append(_event_trace(spec, event, decision, outcomes, observations, trade))
     report["traces"] = traces
     report["portfolio"] = portfolio_result(closed)
+    report["walk_forward"] = walk_forward(closed)
     report["windows"] = {
         name: _window_report(rows, window_start, window_end)
         for name, window_start, window_end in RESEARCH_WINDOWS
@@ -289,19 +304,29 @@ def _event_trace(
     for condition in spec.confirmations:
         if not (condition.factor.endswith(".reaction_1bar") or condition.factor.endswith(".reaction_1m")):
             continue
-        bar = reaction_1bar(
-            resolver,
-            price_factor(series_code(condition.factor)),
-            event.published_at,
-            decision.evaluated_at,
-        )
+        if spec.drive == "BAR":
+            bar = bar_step(
+                resolver,
+                price_factor(series_code(condition.factor)),
+                decision.evaluated_at,
+                decision.evaluated_at,
+            )
+        else:
+            bar = reaction_1bar(
+                resolver,
+                price_factor(series_code(condition.factor)),
+                event.published_at,
+                decision.evaluated_at,
+            )
+        value = None if bar is None else bar.value
         reactions.append(
             {
                 "factor": condition.factor,
-                "value": None if bar is None else bar.value,
+                "value": value,
                 "anchor_at": None if bar is None else bar.anchor_at.isoformat(),
                 "later_at": None if bar is None else bar.later_at.isoformat(),
                 "span_seconds": None if bar is None else int(bar.span.total_seconds()),
+                "passed": _condition_passed(spec, event, condition, value),
             }
         )
     horizon_rows = {}
@@ -326,6 +351,115 @@ def _event_trace(
         "exit_price": None if trade is None else trade.exit_price,
         "net_return": None if trade is None else trade.net_return,
     }
+
+
+def _condition_passed(spec: HypothesisSpec, event: EventRecord, condition, value: float | None) -> bool:
+    if value is None:
+        return False
+    direction, why = resolve_direction(spec, f"{event.title} {event.content}")
+    if why or direction == 0:
+        return False
+    ok, gap = _check(condition, {condition.factor: value}, direction)
+    return bool(ok) and gap is None
+
+
+def _bar_rows(
+    spec: HypothesisSpec,
+    observations: list[Observation],
+    start_at: datetime,
+    end_at: datetime,
+    costs: CostModel,
+) -> list[tuple[EventRecord, DecisionRecord, dict[str, TradeOutcome]]]:
+    from gold_signal.runtime.engine import HypothesisEngine
+
+    resolver = FactorResolver(observations)
+    series = [
+        row
+        for row in resolver.series(price_factor(spec.asset))
+        if start_at <= row.observed_at < end_at
+    ]
+    engine = HypothesisEngine()
+    rows = []
+    for bar in series[1:]:
+        decision = engine.evaluate_bar(spec, bar, resolver)
+        outcomes: dict[str, TradeOutcome] = {}
+        if decision.side in ("LONG", "SHORT") and decision.entry_price is not None and decision.entry_at is not None:
+            for name, delta in HORIZONS:
+                outcomes[name] = _outcome_at_horizon(resolver, spec.asset, decision, delta, costs, name)
+        event = EventRecord(
+            event_id=decision.event_id,
+            event_type="",
+            published_at=bar.observed_at,
+            available_at=bar.available_at,
+            ingested_at=bar.available_at,
+            title=bar.observed_at.isoformat(),
+            content="",
+            source="bar",
+        )
+        rows.append((event, decision, outcomes))
+    return rows
+
+
+def _fill_cost(
+    spec: HypothesisSpec,
+    event: EventRecord,
+    decision: DecisionRecord,
+    observations: list[Observation],
+    costs: CostModel,
+) -> CostModel:
+    resolver = FactorResolver(observations)
+    if spec.drive == "BAR":
+        step = bar_step(resolver, price_factor(spec.asset), decision.evaluated_at, decision.evaluated_at)
+    else:
+        step = reaction_1bar(resolver, price_factor(spec.asset), event.published_at, decision.evaluated_at)
+    move = None if step is None else step.value
+    return execution_costs(None if spec.drive == "BAR" else event, move, costs)
+
+
+def sweep_reaction_threshold(
+    spec: HypothesisSpec,
+    events: list[EventRecord],
+    observations: list[Observation],
+    thresholds: tuple[float, ...],
+    start: str = "2024-01-01",
+    end: str = "2026-09-30",
+) -> list[dict]:
+    """Rerun the same tape at each reaction threshold. The lifecycle, not a rescaled statistic."""
+    from dataclasses import replace
+
+    rows = []
+    for value in thresholds:
+        confirmations = tuple(
+            replace(condition, value=value)
+            if condition.factor.endswith(("reaction_1bar", "reaction_1m")) and condition.value is not None
+            else condition
+            for condition in spec.confirmations
+        )
+        report = replay_report(replace(spec, confirmations=confirmations), start, end, events, observations)
+        rows.append(
+            {
+                "threshold": value,
+                "trades": report["trades"],
+                "avg_return": report.get("avg_return"),
+                "evidence_status": report.get("evidence_status"),
+                "end_equity": (report.get("portfolio") or {}).get("end_equity"),
+            }
+        )
+    return rows
+
+
+def compare_reports(left: dict, right: dict) -> dict:
+    def pack(report: dict) -> dict:
+        net = report.get("net") or {}
+        portfolio = report.get("portfolio") or {}
+        return {
+            "evidence_status": report.get("evidence_status"),
+            "trades": report.get("trades"),
+            "avg_return": net.get("avg_return"),
+            "end_equity": portfolio.get("end_equity"),
+        }
+
+    return {"left": pack(left), "right": pack(right)}
 
 
 def _played(
@@ -384,7 +518,7 @@ def _coverage_gaps(
     observations: list[Observation],
 ) -> list[str]:
     missing: list[str] = []
-    if not events:
+    if spec.drive != "BAR" and not events:
         missing.append(f"{spec.asset}: no point-in-time news archive")
     present = {row.factor for row in observations}
     if price_factor(spec.asset) not in present:
@@ -447,6 +581,7 @@ def _empty_report(
         "missing": missing,
         "traces": [],
         "portfolio": {"start_equity": 1.0, "end_equity": 1.0, "executed": 0, "skipped": 0, "curve": [{"at": None, "equity": 1.0}]},
+        "walk_forward": walk_forward([]),
         "win_rate": None,
         "avg_return": None,
     }

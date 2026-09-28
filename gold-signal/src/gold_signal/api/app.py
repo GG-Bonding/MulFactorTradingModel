@@ -152,9 +152,9 @@ def create_app(store: ProductStore, feed: object | None = None) -> FastAPI:
         return _version_json(version)
 
     @app.post("/api/agents/{agent_id}/backtests", status_code=201)
-    def create_backtest(agent_id: str) -> dict:
+    def create_backtest(agent_id: str, start: str = "2024-01-01", end: str = "2026-09-30") -> dict:
         try:
-            return run_backtest(store, agent_id)
+            return run_backtest(store, agent_id, start=start, end=end)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="agent not found") from exc
         except ValueError as exc:

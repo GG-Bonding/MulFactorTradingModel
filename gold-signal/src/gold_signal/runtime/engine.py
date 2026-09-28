@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import timedelta
 
 from gold_signal.hypothesis import HypothesisSpec, _check, resolve_direction
-from gold_signal.observation import EventRecord
+from gold_signal.observation import EventRecord, FactorResolver, Observation
 from gold_signal.replay_clock import DecisionRecord, fill_price
-from gold_signal.research import confirmation_value, price_factor
+from gold_signal.research import bar_step, confirmation_value, price_factor
 from gold_signal.runtime.context import EvaluationContext
 
 
@@ -75,6 +75,56 @@ class HypothesisEngine:
             hypothesis_id=hypothesis.id,
             evaluated_at=now,
         )
+
+
+    def evaluate_bar(self, hypothesis: HypothesisSpec, bar: Observation, resolver: FactorResolver) -> DecisionRecord:
+        """One decision when a bar closes. There is no news headline on this path."""
+        now = bar.available_at
+        blank = dict(
+            event_id=f"bar-{bar.observed_at.isoformat()}",
+            hypothesis_id=hypothesis.id,
+            evaluated_at=now,
+            entry_at=None,
+            entry_price=None,
+        )
+        if hypothesis.drive != "BAR":
+            return DecisionRecord(side="FLAT", reasons=("not a bar-driven hypothesis",), **blank)
+        if hypothesis.entry not in ("LONG", "SHORT"):
+            return DecisionRecord(side="FLAT", reasons=("bar drive needs LONG or SHORT",), **blank)
+        direction = 1 if hypothesis.entry == "LONG" else -1
+        values: dict[str, float | None] = {}
+        for condition in hypothesis.confirmations:
+            step = bar_step(resolver, price_factor(_series(condition.factor)), bar.observed_at, now)
+            if step is None:
+                return DecisionRecord(side="WAITING", reasons=(f"{condition.factor} is waiting",), **blank)
+            values[condition.factor] = step.value
+        for condition in hypothesis.confirmations:
+            ok, gap = _check(condition, values, direction)
+            if gap:
+                return DecisionRecord(side="FLAT", reasons=(gap,), **blank)
+            if not ok:
+                return DecisionRecord(
+                    side="FLAT",
+                    reasons=(f"failed {condition.factor} {condition.operator}",),
+                    **blank,
+                )
+        entry_at, entry_price = fill_price(hypothesis.entry, bar.value, bar.observed_at, bar.observed_at)
+        if entry_price is None or entry_at is None:
+            return DecisionRecord(side="WAITING", reasons=("entry print is not knowable yet",), **blank)
+        passed = len(hypothesis.confirmations)
+        return DecisionRecord(
+            side=hypothesis.entry,
+            reasons=(f"{passed}/{passed} confirmations passed",),
+            entry_at=entry_at,
+            entry_price=entry_price,
+            event_id=blank["event_id"],
+            hypothesis_id=hypothesis.id,
+            evaluated_at=now,
+        )
+
+
+def _series(factor: str) -> str:
+    return factor.split(".", 1)[0]
 
 
 def _event_text(event: EventRecord) -> str:

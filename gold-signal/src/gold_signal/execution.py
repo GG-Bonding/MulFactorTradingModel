@@ -6,7 +6,7 @@ from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from gold_signal.observation import Observation
+from gold_signal.observation import EventRecord, Observation
 from gold_signal.replay_clock import CostModel, DecisionRecord, TradeOutcome, measure_outcome, signed_return
 
 
@@ -59,6 +59,47 @@ class ClosedTrade:
     exit_reason: str
     net_return: float | None
     outcome: TradeOutcome
+
+
+def execution_costs(event: EventRecord | None, move: float | None, base: CostModel | None = None) -> CostModel:
+    """Macro releases pay a wider spread. A large bar adds a volatility slip, capped at 1%."""
+    base = base or CostModel()
+    macro = event is not None and (
+        event.event_type.startswith(("NFP_", "CPI_"))
+        or "非农" in f"{event.title} {event.content}"
+        or "CPI" in f"{event.title} {event.content}".upper()
+    )
+    spread = base.spread_cost * (4 if macro else 1)
+    slip = base.slippage_cost * (3 if macro else 1)
+    if move is not None:
+        slip += min(0.01, abs(move) * 0.25)
+    return CostModel(spread_cost=spread, slippage_cost=slip, commission=base.commission)
+
+
+def walk_forward(trades: list[ClosedTrade], folds: int = 3) -> list[dict]:
+    """Contiguous folds in entry order. Later folds are not used to size the earlier ones."""
+    ordered = sorted((trade for trade in trades if trade.net_return is not None), key=lambda trade: (trade.entry_at, trade.event_id))
+    if not ordered:
+        return [{"fold": index, "trades": 0, "skipped": 0, "end_equity": None} for index in range(1, folds + 1)]
+    size = max(1, len(ordered) // folds)
+    chunks: list[list[ClosedTrade]] = [ordered[index:index + size] for index in range(0, len(ordered), size)]
+    while len(chunks) > folds:
+        chunks[-2].extend(chunks[-1])
+        chunks.pop()
+    rows = []
+    for index, chunk in enumerate(chunks, start=1):
+        result = portfolio_result(chunk)
+        rows.append(
+            {
+                "fold": index,
+                "trades": result["executed"],
+                "skipped": result["skipped"],
+                "end_equity": result["end_equity"],
+            }
+        )
+    while len(rows) < folds:
+        rows.append({"fold": len(rows) + 1, "trades": 0, "skipped": 0, "end_equity": None})
+    return rows
 
 
 def order_from_decision(decision: DecisionRecord, asset: str) -> OrderIntent | None:

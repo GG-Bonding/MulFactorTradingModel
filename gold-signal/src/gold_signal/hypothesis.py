@@ -36,6 +36,7 @@ class HypothesisSpec:
     notes: tuple[str, ...] = ()
     trigger: str = ""
     exit: ExitPolicy = ExitPolicy()
+    drive: str = "EVENT"
 
 
 _TRIGGERS: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -79,6 +80,13 @@ class HypothesisDecision:
     news_direction: int
     reasons: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
+
+
+def _drive(value: object) -> str:
+    drive = str(value or "EVENT")
+    if drive not in ("EVENT", "BAR"):
+        raise ValueError(f"unsupported drive {drive}")
+    return drive
 
 
 def _exit_policy(data: dict[str, object]) -> ExitPolicy:
@@ -182,6 +190,7 @@ def parse_hypothesis(text: str) -> HypothesisSpec:
         notes=tuple(notes),
         trigger=str(data.get("trigger") or ""),
         exit=_exit_policy(data),
+        drive=_drive(data.get("drive")),
     )
 
 

@@ -66,6 +66,8 @@ def run_backtest(
     now: datetime | None = None,
     events: list | None = None,
     observations: list | None = None,
+    start: str = "2024-01-01",
+    end: str = "2026-09-30",
 ) -> dict:
     agent = _require_agent(store, agent_id)
     if agent.active_version_id is None:
@@ -79,23 +81,21 @@ def run_backtest(
     if events is not None and observations is not None:
         from gold_signal.research import replay_report
 
-        report = replay_report(spec, "2024-01-01", "2026-09-30", events, observations)
+        report = replay_report(spec, start, end, events, observations)
     else:
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
 
         from gold_signal.archive import default_archive, factors_for
         from gold_signal.research import replay_report
 
-        loaded_events, loaded_obs, gaps = default_archive().load(
-            datetime(2024, 1, 1, tzinfo=timezone.utc),
-            datetime(2026, 10, 1, tzinfo=timezone.utc),
-            factors_for(spec),
-        )
+        start_at = datetime.fromisoformat(start[:10]).replace(tzinfo=timezone.utc)
+        end_at = datetime.fromisoformat(end[:10]).replace(tzinfo=timezone.utc) + timedelta(days=1)
+        loaded_events, loaded_obs, gaps = default_archive().load(start_at, end_at, factors_for(spec))
         if gaps:
-            report = historical_validation(spec, "2024-01-01", "2026-09-30", strategy_path=None)
+            report = historical_validation(spec, start, end, strategy_path=None)
             report["missing"] = list(dict.fromkeys([*report.get("missing", []), *gaps]))
         else:
-            report = replay_report(spec, "2024-01-01", "2026-09-30", loaded_events, loaded_obs)
+            report = replay_report(spec, start, end, loaded_events, loaded_obs)
         report["dataset"] = default_archive().manifest()
     run_id = uuid.uuid4().hex
     store.insert_backtest(run_id, agent.id, version.id, report, stamp)

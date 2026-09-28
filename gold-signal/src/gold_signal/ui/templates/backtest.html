@@ -61,12 +61,13 @@
 {% if trace.reasons %}<p>{{ trace.reasons | join(" · ") }}</p>{% endif %}
 {% if trace.reactions %}
 <table>
-  <thead><tr><th>Factor</th><th>Move</th><th>From</th><th>To</th><th>Span</th></tr></thead>
+  <thead><tr><th>Factor</th><th>Move</th><th></th><th>From</th><th>To</th><th>Span</th></tr></thead>
   <tbody>
   {% for item in trace.reactions %}
   <tr>
     <td>{{ item.factor }}</td>
     <td>{{ pct(item.value) }}</td>
+    <td>{% if item.passed %}PASS{% else %}FAIL{% endif %}</td>
     <td>{{ item.anchor_at or "—" }}</td>
     <td>{{ item.later_at or "—" }}</td>
     <td>{% if item.span_seconds is not none %}{{ item.span_seconds }}s{% else %}—{% endif %}</td>
@@ -76,6 +77,21 @@
 </table>
 {% endif %}
 {% endfor %}
+{% endif %}
+{% if report.walk_forward %}
+<h2>Walk forward</h2>
+<table>
+  <thead><tr><th>Fold</th><th>Trades</th><th>End equity</th></tr></thead>
+  <tbody>
+  {% for fold in report.walk_forward %}
+  <tr>
+    <td>{{ fold.fold }}</td>
+    <td>{{ fold.trades }}</td>
+    <td>{{ fold.end_equity if fold.end_equity is not none else "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
 {% endif %}
 <h2>Train / Validation / OOS</h2>
 <table>
