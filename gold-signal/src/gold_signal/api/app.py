@@ -13,6 +13,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from gold_signal.compiler import compile_idea
+from gold_signal.hypothesis import parse_hypothesis
+from gold_signal.research import changed_confirmations, compare_reports
 from gold_signal.domain.models import TransitionError
 from gold_signal.persistence.service import (
     add_hypothesis_version,
@@ -159,6 +161,31 @@ def create_app(store: ProductStore, feed: object | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="agent not found") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/agents/{agent_id}/compare")
+    def compare(agent_id: str) -> dict:
+        agent = store.get_agent(agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        versions = store.list_versions(agent_id)
+        runs = store.list_backtests(agent_id)
+        paired = []
+        for version in versions:
+            own = [row for row in runs if row["version_id"] == version.id]
+            if own:
+                paired.append((version, own[-1]["report"]))
+        if len(paired) < 2:
+            raise HTTPException(status_code=404, detail="two backtested versions are required")
+        (left_version, left_report), (right_version, right_report) = paired[-2], paired[-1]
+        return {
+            "left_version": left_version.version,
+            "right_version": right_version.version,
+            "metrics": compare_reports(left_report, right_report),
+            "changed": changed_confirmations(
+                parse_hypothesis(left_version.hypothesis_yaml),
+                parse_hypothesis(right_version.hypothesis_yaml),
+            ),
+        }
 
     @app.get("/api/agents/{agent_id}/backtests")
     def list_backtests(agent_id: str) -> dict:

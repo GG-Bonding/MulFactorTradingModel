@@ -90,6 +90,32 @@ def test_window_sweep_and_compare_use_the_same_lifecycle():
     assert compared["right"]["trades"] == 2
 
 
+def test_two_backtested_versions_compare_the_threshold_change(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from gold_signal.api.app import create_app
+
+    store = ProductStore(tmp_path / "compare.sqlite")
+    client = TestClient(create_app(store))
+    created = client.post("/api/agents", json={"idea": "如果非农高于预期，而且黄金一分钟下跌，我做空黄金。"})
+    agent_id = created.json()["agent"]["id"]
+    assert client.post(f"/api/agents/{agent_id}/backtests").status_code == 201
+    yaml = created.json()["version"]["hypothesis_yaml"].replace("0.0008", "0.0012")
+    assert client.post(f"/api/agents/{agent_id}/versions", json={"yaml": yaml}).status_code == 201
+    assert client.post(f"/api/agents/{agent_id}/backtests").status_code == 201
+    compared = client.get(f"/api/agents/{agent_id}/compare")
+    assert compared.status_code == 200
+    body = compared.json()
+    assert body["left_version"] == 1
+    assert body["right_version"] == 2
+    assert body["changed"][0]["factor"] == "XAUUSD.reaction_1bar"
+    assert body["changed"][0]["left"]["value"] == 0.0008
+    assert body["changed"][0]["right"]["value"] == 0.0012
+    page = client.get(f"/agents/{agent_id}")
+    assert "Compare v1 vs v2" in page.text
+    store.close()
+
+
 def test_api_window_can_exclude_the_packaged_event(tmp_path):
     store = ProductStore(tmp_path / "window.sqlite")
     agent, _version = create_from_idea(store, "如果非农低于预期，黄金和白银一分钟上涨，我做多黄金。")

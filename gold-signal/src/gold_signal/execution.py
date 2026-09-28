@@ -188,6 +188,7 @@ def portfolio_result(trades: list[ClosedTrade]) -> dict:
     open_until: datetime | None = None
     executed = 0
     skipped = 0
+    skipped_ids: list[str] = []
     curve = [{"at": None, "equity": 1.0}]
     ordered = sorted(trades, key=lambda trade: (trade.entry_at, trade.event_id))
     for trade in ordered:
@@ -195,6 +196,7 @@ def portfolio_result(trades: list[ClosedTrade]) -> dict:
             continue
         if open_until is not None and trade.entry_at < open_until:
             skipped += 1
+            skipped_ids.append(trade.event_id)
             continue
         equity *= 1.0 + trade.net_return
         open_until = trade.exit_at
@@ -205,5 +207,6 @@ def portfolio_result(trades: list[ClosedTrade]) -> dict:
         "end_equity": equity,
         "executed": executed,
         "skipped": skipped,
+        "skipped_ids": skipped_ids,
         "curve": curve,
     }

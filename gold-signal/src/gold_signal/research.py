@@ -205,6 +205,9 @@ def replay_report(
         traces.append(_event_trace(spec, event, decision, outcomes, observations, trade))
     report["traces"] = traces
     report["portfolio"] = portfolio_result(closed)
+    skipped_ids = set(report["portfolio"].get("skipped_ids") or [])
+    for trace in traces:
+        trace["skipped_open_position"] = trace["event_id"] in skipped_ids
     report["walk_forward"] = walk_forward(closed)
     report["windows"] = {
         name: _window_report(rows, window_start, window_end)
@@ -455,11 +458,33 @@ def compare_reports(left: dict, right: dict) -> dict:
         return {
             "evidence_status": report.get("evidence_status"),
             "trades": report.get("trades"),
+            "win_rate": net.get("win_rate"),
             "avg_return": net.get("avg_return"),
+            "median_return": net.get("median_return"),
+            "profit_factor": net.get("profit_factor"),
             "end_equity": portfolio.get("end_equity"),
         }
 
     return {"left": pack(left), "right": pack(right)}
+
+
+def changed_confirmations(left: HypothesisSpec, right: HypothesisSpec) -> list[dict]:
+    """Conditions whose factor, operator, or threshold differ between two versions."""
+    before = {condition.factor: condition for condition in left.confirmations}
+    after = {condition.factor: condition for condition in right.confirmations}
+    changes = []
+    for factor in list(before) + [factor for factor in after if factor not in before]:
+        old = before.get(factor)
+        new = after.get(factor)
+        if old is None or new is None or old.operator != new.operator or old.value != new.value:
+            changes.append(
+                {
+                    "factor": factor,
+                    "left": None if old is None else {"operator": old.operator, "value": old.value},
+                    "right": None if new is None else {"operator": new.operator, "value": new.value},
+                }
+            )
+    return changes
 
 
 def _played(

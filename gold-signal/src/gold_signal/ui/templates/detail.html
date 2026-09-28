@@ -104,6 +104,30 @@
 <ul>{% for signal in signals %}<li>{{ signal.side }} {{ signal.entry_price }} · {{ signal.reason }}</li>{% endfor %}</ul>
 {% else %}<p>—</p>{% endif %}
 
+{% if comparison %}
+<h2>Compare {{ comparison.left_name }} vs {{ comparison.right_name }}</h2>
+<table>
+  <thead><tr><th></th><th>{{ comparison.left_name }}</th><th>{{ comparison.right_name }}</th></tr></thead>
+  <tbody>
+  {% for row in comparison.rows %}
+  <tr>
+    <th>{{ row.label }}</th>
+    <td>{% if row.percent %}{{ pct(row.left) }}{% else %}{{ row.left if row.left is not none else "—" }}{% endif %}</td>
+    <td>{% if row.percent %}{{ pct(row.right) }}{% else %}{{ row.right if row.right is not none else "—" }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if comparison.changed %}
+<p>Changed</p>
+<ul>
+{% for item in comparison.changed %}
+  <li>{{ item.factor }} {{ item.left.operator if item.left else "—" }} {{ item.left.value if item.left else "—" }} → {{ item.right.operator if item.right else "—" }} {{ item.right.value if item.right else "—" }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% endif %}
+
 <h2>Versions</h2>
 <ul>
 {% for item in versions %}

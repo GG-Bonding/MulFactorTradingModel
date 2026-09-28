@@ -57,7 +57,7 @@
 <h2>Events</h2>
 {% for trace in report.traces %}
 <p><strong>{{ trace.published_at }}</strong> {{ trace.title }}</p>
-<p>Decision {{ trace.side }}{% if trace.entry_price is not none %} · Entry {{ trace.entry_price }}{% endif %}{% if trace.exit_reason %} · Exit {{ trace.exit_reason }} {{ trace.exit_price }}{% endif %}</p>
+<p>Decision {{ trace.side }}{% if trace.entry_price is not none %} · Entry {{ trace.entry_price }}{% endif %}{% if trace.exit_reason %} · Exit {{ trace.exit_reason }} {{ trace.exit_price }}{% endif %}{% if trace.skipped_open_position %} · Skipped, previous position still open{% endif %}</p>
 {% if trace.reasons %}<p>{{ trace.reasons | join(" · ") }}</p>{% endif %}
 {% if trace.reactions %}
 <table>

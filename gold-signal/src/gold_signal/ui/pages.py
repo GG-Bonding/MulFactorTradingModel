@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from gold_signal.compiler import compile_idea, render_hypothesis
 from gold_signal.domain.models import TransitionError
 from gold_signal.hypothesis import parse_hypothesis
-from gold_signal.research import EVIDENCE_VALID_MIN_TRADES, evidence_grade
+from gold_signal.research import EVIDENCE_VALID_MIN_TRADES, changed_confirmations, compare_reports, evidence_grade
 from gold_signal.observation import EventRecord, Observation
 from gold_signal.persistence.service import (
     add_hypothesis_version,
@@ -231,6 +231,50 @@ def _detail_context(store, agent, error: str | None, request: Request) -> dict:
         "can_paper": _can_paper(agent, report),
         "min_trades": EVIDENCE_VALID_MIN_TRADES,
         "feed": _feed_view(request),
+        "comparison": _version_comparison(store, agent),
+    }
+
+
+def _version_comparison(store, agent) -> dict | None:
+    versions = store.list_versions(agent.id)
+    runs = store.list_backtests(agent.id)
+    paired = []
+    for version in versions:
+        own = [row for row in runs if row["version_id"] == version.id]
+        if own:
+            paired.append((version, _view_report(own[-1]["report"])))
+    if len(paired) < 2:
+        return None
+    (left_version, left_report), (right_version, right_report) = paired[-2], paired[-1]
+    compared = compare_reports(left_report, right_report)
+    changes = changed_confirmations(
+        parse_hypothesis(left_version.hypothesis_yaml),
+        parse_hypothesis(right_version.hypothesis_yaml),
+    )
+    labels = (
+        ("Evidence", "evidence_status", False),
+        ("Trades", "trades", False),
+        ("Win rate", "win_rate", True),
+        ("Avg net", "avg_return", True),
+        ("Median", "median_return", True),
+        ("Profit factor", "profit_factor", False),
+        ("End equity", "end_equity", False),
+    )
+    rows = []
+    for label, key, is_percent in labels:
+        rows.append(
+            {
+                "label": label,
+                "left": compared["left"].get(key),
+                "right": compared["right"].get(key),
+                "percent": is_percent,
+            }
+        )
+    return {
+        "left_name": f"v{left_version.version}",
+        "right_name": f"v{right_version.version}",
+        "rows": rows,
+        "changed": changes,
     }
 
 
