@@ -113,6 +113,23 @@ def _stamp(hour: int, minute: int, second: int = 0) -> datetime:
     return datetime(2026, 9, 4, hour, minute, second, tzinfo=timezone.utc)
 
 
+def test_indexed_resolver_matches_the_last_visible_close():
+    prices = []
+    origin = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
+    for index in range(180):
+        stamp = origin + timedelta(minutes=index)
+        prices.append(Observation("market.XAUUSD.close", 1000.0 + index, stamp, stamp, None, "fixture", "XAUUSD"))
+    resolver = FactorResolver(prices)
+    now = datetime(2026, 9, 4, 13, 0, tzinfo=timezone.utc)
+    found = resolver.price_at("market.XAUUSD.close", now, now)
+    assert found is not None
+    assert found.observed_at == now
+    assert found.value == 1060.0
+    hidden = resolver.price_at("market.XAUUSD.close", now + timedelta(minutes=30), now)
+    assert hidden is not None
+    assert hidden.observed_at == now
+
+
 def test_future_print_is_invisible():
     _event, prices = _tape()
     resolver = FactorResolver(prices)

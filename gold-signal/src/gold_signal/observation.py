@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -61,24 +62,36 @@ class CoverageManifest:
 
 
 class FactorResolver:
-    """At time t, only observations with available_at <= t are visible."""
+    """At time t, only observations with available_at <= t are visible.
+
+    Each factor is kept in observed_at order so a lookup is a binary search.
+    """
 
     def __init__(self, observations: list[Observation]) -> None:
         self.observations = list(observations)
+        grouped: dict[str, list[Observation]] = {}
+        for row in self.observations:
+            grouped.setdefault(row.factor, []).append(row)
+        self._by_factor = {
+            factor: tuple(sorted(rows, key=lambda row: row.observed_at))
+            for factor, rows in grouped.items()
+        }
+
+    def series(self, factor: str) -> tuple[Observation, ...]:
+        return self._by_factor.get(factor, ())
 
     def visible(self, factor: str, now: datetime) -> list[Observation]:
-        rows = [
-            row
-            for row in self.observations
-            if row.factor == factor and row.available_at <= now and row.observed_at <= now
-        ]
-        return sorted(rows, key=lambda row: row.observed_at)
+        rows = self.series(factor)
+        end = bisect_right(rows, now, key=lambda row: row.observed_at)
+        return [row for row in rows[:end] if row.available_at <= now]
 
     def price_at(self, factor: str, when: datetime, now: datetime) -> Observation | None:
-        rows = [row for row in self.visible(factor, now) if row.observed_at <= when]
-        if not rows:
-            return None
-        return rows[-1]
+        rows = self.series(factor)
+        end = bisect_right(rows, when, key=lambda row: row.observed_at)
+        for row in reversed(rows[:end]):
+            if row.available_at <= now and row.observed_at <= now:
+                return row
+        return None
 
 
 class Recorder:

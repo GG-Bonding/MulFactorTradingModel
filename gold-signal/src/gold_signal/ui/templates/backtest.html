@@ -42,6 +42,30 @@
 <p>Point in time · news {{ report.dataset.point_in_time.news }} · market {{ report.dataset.point_in_time.market }}</p>
 {% endif %}
 {% endif %}
+{% if report.traces %}
+<h2>Events</h2>
+{% for trace in report.traces %}
+<p><strong>{{ trace.published_at }}</strong> {{ trace.title }}</p>
+<p>Decision {{ trace.side }}{% if trace.entry_price is not none %} · Entry {{ trace.entry_price }}{% endif %}</p>
+{% if trace.reasons %}<p>{{ trace.reasons | join(" · ") }}</p>{% endif %}
+{% if trace.reactions %}
+<table>
+  <thead><tr><th>Factor</th><th>Move</th><th>From</th><th>To</th><th>Span</th></tr></thead>
+  <tbody>
+  {% for item in trace.reactions %}
+  <tr>
+    <td>{{ item.factor }}</td>
+    <td>{{ pct(item.value) }}</td>
+    <td>{{ item.anchor_at or "—" }}</td>
+    <td>{{ item.later_at or "—" }}</td>
+    <td>{% if item.span_seconds is not none %}{{ item.span_seconds }}s{% else %}—{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endfor %}
+{% endif %}
 <h2>Train / Validation / OOS</h2>
 <table>
   <thead><tr><th>Window</th><th>Status</th><th>Samples</th><th>Avg net</th></tr></thead>

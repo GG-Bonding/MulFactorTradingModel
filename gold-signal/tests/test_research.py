@@ -187,6 +187,8 @@ def test_replay_report_is_deterministic_and_splits_windows():
     assert first["windows"]["oos"]["samples"] == 1
     assert first["windows"]["train"]["samples"] == 0
     assert first["windows"]["validation"]["evidence_status"] == "NO_DATA"
+    assert first["traces"][0]["reactions"][0]["span_seconds"] == 60
+    assert first["traces"][0]["side"] == "LONG"
     assert first["net"]["expectancy"] == first["net"]["avg_return"]
     assert first["net"]["avg_return"] < first["by_horizon"]["5m"]["gross_avg_return"]
 

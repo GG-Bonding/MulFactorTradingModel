@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import statistics
+from bisect import bisect_left
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -178,6 +179,7 @@ def replay_report(
     selected.sort(key=lambda event: (_utc(event.published_at), event.event_id))
     rows = [_played(spec, event, observations, costs) for event in selected]
     _fill_report(report, rows, costs)
+    report["traces"] = [_event_trace(spec, event, decision, outcomes, observations) for event, decision, outcomes in rows]
     report["windows"] = {
         name: _window_report(rows, window_start, window_end)
         for name, window_start, window_end in RESEARCH_WINDOWS
@@ -262,6 +264,54 @@ def edge_distribution(outcomes: list[TradeOutcome]) -> dict:
     return stats
 
 
+def _event_trace(
+    spec: HypothesisSpec,
+    event: EventRecord,
+    decision: DecisionRecord,
+    outcomes: dict[str, TradeOutcome],
+    observations: list[Observation],
+) -> dict:
+    """What the clock could see for one event. A reaction names the two closes it used."""
+    resolver = FactorResolver(observations)
+    reactions = []
+    for condition in spec.confirmations:
+        if not (condition.factor.endswith(".reaction_1bar") or condition.factor.endswith(".reaction_1m")):
+            continue
+        bar = reaction_1bar(
+            resolver,
+            price_factor(series_code(condition.factor)),
+            event.published_at,
+            decision.evaluated_at,
+        )
+        reactions.append(
+            {
+                "factor": condition.factor,
+                "value": None if bar is None else bar.value,
+                "anchor_at": None if bar is None else bar.anchor_at.isoformat(),
+                "later_at": None if bar is None else bar.later_at.isoformat(),
+                "span_seconds": None if bar is None else int(bar.span.total_seconds()),
+            }
+        )
+    horizon_rows = {}
+    for name, outcome in outcomes.items():
+        horizon_rows[name] = {
+            "net_return": outcome.net_return,
+            "mfe": outcome.mfe,
+            "mae": outcome.mae,
+        }
+    return {
+        "event_id": event.event_id,
+        "title": event.title,
+        "published_at": event.published_at.isoformat(),
+        "side": decision.side,
+        "reasons": list(decision.reasons),
+        "entry_at": None if decision.entry_at is None else decision.entry_at.isoformat(),
+        "entry_price": decision.entry_price,
+        "reactions": reactions,
+        "horizons": horizon_rows,
+    }
+
+
 def _played(
     spec: HypothesisSpec,
     event: EventRecord,
@@ -283,12 +333,9 @@ def _outcome_at_horizon(
     assert decision.entry_at is not None and decision.entry_price is not None
     exit_at = decision.entry_at + delta
     series = price_factor(asset)
-    later = [
-        row
-        for row in resolver.observations
-        if row.factor == series and row.observed_at >= exit_at
-    ]
-    if not later:
+    bars = resolver.series(series)
+    start = bisect_left(bars, exit_at, key=lambda row: row.observed_at)
+    if start >= len(bars):
         return measure_outcome(
             side=decision.side,
             entry_price=decision.entry_price,
@@ -298,11 +345,11 @@ def _outcome_at_horizon(
             costs=costs,
             horizon=horizon,
         )
-    last = min(later, key=lambda row: row.observed_at)
+    last = bars[start]
     path = [
         (row.observed_at, row.value)
-        for row in resolver.observations
-        if row.factor == series and decision.entry_at < row.observed_at <= last.observed_at
+        for row in bars
+        if decision.entry_at < row.observed_at <= last.observed_at
     ]
     return measure_outcome(
         side=decision.side,
@@ -382,6 +429,7 @@ def _empty_report(
             for name, window_start, window_end in RESEARCH_WINDOWS
         },
         "missing": missing,
+        "traces": [],
         "win_rate": None,
         "avg_return": None,
     }
