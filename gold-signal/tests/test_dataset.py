@@ -51,6 +51,31 @@ def test_repeated_wires_about_one_strike_are_one_sample(tmp_path):
     assert "dropped_duplicates: 3" in manifest
 
 
+def test_fetched_flash_and_minutes_cluster_before_they_are_saved(tmp_path):
+    from gold_signal.dataset.builder import build_fetched_dataset
+
+    flash = {
+        "data": [
+            {"id": "a", "time": "2026-09-28 18:01:00", "data": {"title": "", "content": "俄罗斯袭击第聂伯一座办公楼"}},
+            {"id": "b", "time": "2026-09-28 18:04:00", "data": {"title": "", "content": "第聂伯袭击造成 3 人死亡"}},
+        ]
+    }
+    minutes = (
+        'var _XAU=([{"d":"2026-09-28 18:00:00","c":"4100"},{"d":"2026-09-28 18:01:00","c":"4090"},'
+        '{"d":"2026-09-28 18:02:00","c":"4088"}])'
+    )
+    summary = build_fetched_dataset(
+        tmp_path,
+        flash,
+        minutes,
+        name="gold_macro_v1",
+        start=datetime(2026, 9, 28, tzinfo=timezone.utc),
+        end=datetime(2026, 9, 29, tzinfo=timezone.utc),
+    )
+    assert summary["samples"] == 1
+    assert summary["dropped_duplicates"] == 1
+
+
 def test_a_headline_without_the_next_bar_is_not_a_sample(tmp_path):
     events = [_headline("late", 50, "黑海货船遭袭")]
     summary = build_dataset(

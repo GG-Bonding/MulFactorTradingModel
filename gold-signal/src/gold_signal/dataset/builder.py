@@ -13,6 +13,32 @@ from gold_signal.dataset.validator import validate_samples
 from gold_signal.observation import Observation
 
 
+def build_fetched_dataset(
+    destination: Path,
+    flash_payload: dict,
+    minute_body: str,
+    *,
+    name: str,
+    start: datetime,
+    end: datetime,
+    factor: str = "market.XAUUSD.close",
+    symbol: str = "XAUUSD",
+) -> dict:
+    """Parse one flash page and one minute payload, then cluster and align."""
+    from gold_signal.dataset.event_fetcher import parse_jin10_flash
+    from gold_signal.dataset.market_fetcher import parse_sina_minutes
+
+    return build_dataset(
+        destination,
+        parse_jin10_flash(flash_payload),
+        parse_sina_minutes(minute_body, factor, symbol),
+        name=name,
+        start=start,
+        end=end,
+        factor=factor,
+    )
+
+
 def build_dataset(
     destination: Path,
     events: list[RawEvent],
