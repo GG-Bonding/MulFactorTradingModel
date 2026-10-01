@@ -114,15 +114,21 @@ def order_from_decision(decision: DecisionRecord, asset: str) -> OrderIntent | N
     )
 
 
-def simulate_trade(
+@dataclass
+class WorkingPosition:
+    """One open trade. Historical replay and paper both append bars here."""
+
+    position: Position
+    costs: CostModel
+    path: list[tuple[datetime, float]]
+
+
+def open_position(
     decision: DecisionRecord,
     asset: str,
-    bars: tuple[Observation, ...] | list[Observation],
     policy: ExitPolicy,
     costs: CostModel | None = None,
-) -> ClosedTrade | None:
-    """Fill at the decision print, then leave on stop, target, or the hold limit."""
-    costs = costs or CostModel()
+) -> WorkingPosition | None:
     intent = order_from_decision(decision, asset)
     if intent is None or decision.entry_price is None or decision.entry_at is None:
         return None
@@ -136,50 +142,94 @@ def simulate_trade(
         entry_at=fill.filled_at,
         policy=policy,
     )
-    ordered = tuple(sorted(bars, key=lambda row: row.observed_at))
-    start = bisect_left(ordered, position.entry_at, key=lambda row: row.observed_at)
-    deadline = position.entry_at + position.policy.max_hold
-    exit_price: float | None = None
-    exit_at: datetime | None = None
-    reason: str | None = None
-    path: list[tuple[datetime, float]] = []
-    for row in ordered[start:]:
-        if row.observed_at <= position.entry_at:
-            continue
-        path.append((row.observed_at, row.value))
-        signed = signed_return(position.side, position.entry_price, row.value)
-        if position.policy.take_profit is not None and signed >= position.policy.take_profit:
-            exit_price, exit_at, reason = row.value, row.observed_at, "TAKE_PROFIT"
-            break
-        if position.policy.stop_loss is not None and signed <= -abs(position.policy.stop_loss):
-            exit_price, exit_at, reason = row.value, row.observed_at, "STOP_LOSS"
-            break
-        if row.observed_at >= deadline:
-            exit_price, exit_at, reason = row.value, row.observed_at, "MAX_HOLD"
-            break
-    if exit_price is None or exit_at is None or reason is None:
+    return WorkingPosition(position, costs or CostModel(), [])
+
+
+def check_exit(position: Position, price: float, when: datetime) -> str | None:
+    """Stop, target, then the hold limit. The same bar cannot be the entry."""
+    if when <= position.entry_at:
         return None
+    signed = signed_return(position.side, position.entry_price, price)
+    if position.policy.take_profit is not None and signed >= position.policy.take_profit:
+        return "TAKE_PROFIT"
+    if position.policy.stop_loss is not None and signed <= -abs(position.policy.stop_loss):
+        return "STOP_LOSS"
+    if when >= position.entry_at + position.policy.max_hold:
+        return "MAX_HOLD"
+    return None
+
+
+def close_position(state: WorkingPosition, price: float, when: datetime, reason: str) -> ClosedTrade:
     outcome = measure_outcome(
-        side=position.side,
-        entry_price=position.entry_price,
-        entry_at=position.entry_at,
-        path=path,
-        exit_price=exit_price,
-        costs=costs,
+        side=state.position.side,
+        entry_price=state.position.entry_price,
+        entry_at=state.position.entry_at,
+        path=list(state.path),
+        exit_price=price,
+        costs=state.costs,
         horizon=reason,
     )
     return ClosedTrade(
-        event_id=intent.event_id,
-        asset=asset,
-        side=position.side,
-        entry_price=position.entry_price,
-        entry_at=position.entry_at,
-        exit_price=exit_price,
-        exit_at=exit_at,
+        event_id=state.position.event_id,
+        asset=state.position.asset,
+        side=state.position.side,
+        entry_price=state.position.entry_price,
+        entry_at=state.position.entry_at,
+        exit_price=price,
+        exit_at=when,
         exit_reason=reason,
         net_return=outcome.net_return,
         outcome=outcome,
     )
+
+
+def on_bar(state: WorkingPosition, bar: Observation) -> ClosedTrade | None:
+    """Advance one print. A bar at or before the fill does not count."""
+    if bar.observed_at <= state.position.entry_at:
+        return None
+    state.path.append((bar.observed_at, bar.value))
+    reason = check_exit(state.position, bar.value, bar.observed_at)
+    if reason is None:
+        return None
+    return close_position(state, bar.value, bar.observed_at, reason)
+
+
+def simulate_trade(
+    decision: DecisionRecord,
+    asset: str,
+    bars: tuple[Observation, ...] | list[Observation],
+    policy: ExitPolicy,
+    costs: CostModel | None = None,
+) -> ClosedTrade | None:
+    """Historical path. Walk every bar after the fill through the shared lifecycle."""
+    state = open_position(decision, asset, policy, costs)
+    if state is None:
+        return None
+    ordered = tuple(sorted(bars, key=lambda row: row.observed_at))
+    start = bisect_left(ordered, state.position.entry_at, key=lambda row: row.observed_at)
+    for row in ordered[start:]:
+        closed = on_bar(state, row)
+        if closed is not None:
+            return closed
+    return None
+
+
+def paper_execution(
+    decision: DecisionRecord,
+    asset: str,
+    bars: tuple[Observation, ...] | list[Observation],
+    policy: ExitPolicy,
+    costs: CostModel | None = None,
+) -> ClosedTrade | None:
+    """Live path. Feed bars one at a time through the same exit checks."""
+    state = open_position(decision, asset, policy, costs)
+    if state is None:
+        return None
+    for row in sorted(bars, key=lambda item: item.observed_at):
+        closed = on_bar(state, row)
+        if closed is not None:
+            return closed
+    return None
 
 
 def portfolio_result(trades: list[ClosedTrade]) -> dict:

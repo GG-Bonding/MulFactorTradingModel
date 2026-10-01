@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from gold_signal.agent import order_from_decision
 from gold_signal.domain.models import AgentStatus
+from gold_signal.execution import paper_execution
 from gold_signal.hypothesis import parse_hypothesis, trigger_matches
-from gold_signal.observation import EventRecord, FactorResolver, Observation
+from gold_signal.observation import EventRecord, Observation
 from gold_signal.persistence.service import record_paper_trade, record_signal
 from gold_signal.persistence.store import ProductStore
-from gold_signal.replay_clock import measure_outcome
+from gold_signal.replay_clock import CostModel, DecisionRecord
 from gold_signal.research import price_factor
 from gold_signal.runtime.context import LiveEvaluationContext
 from gold_signal.runtime.engine import HypothesisEngine
@@ -96,8 +97,8 @@ class AgentRuntime:
         return created
 
     def _settle(self, store: ProductStore, observations: list[Observation], now: datetime) -> list[str]:
-        resolver = FactorResolver(observations)
         settled: list[str] = []
+        visible = [row for row in observations if row.observed_at <= now and row.available_at <= now]
         for trade in store.list_open_paper_trades():
             signal = store.get_signal(trade["signal_id"]) if trade.get("signal_id") else None
             if signal is None or trade.get("entry_price") is None:
@@ -105,36 +106,37 @@ class AgentRuntime:
             version = store.get_version(trade["version_id"])
             if version is None:
                 continue
-            opened = datetime.fromisoformat(signal["evaluated_at"])
-            exit_at = opened + timedelta(minutes=5)
-            if now < exit_at:
-                continue
             spec = parse_hypothesis(version.hypothesis_yaml)
-            series = price_factor(spec.asset)
-            last = resolver.price_at(series, exit_at, now)
-            if last is None or last.observed_at < exit_at:
-                continue
-            path = [
-                (row.observed_at, row.value)
-                for row in resolver.visible(series, exit_at)
-                if opened < row.observed_at <= last.observed_at
-            ]
-            outcome = measure_outcome(
+            opened = datetime.fromisoformat(signal["evaluated_at"])
+            decision = DecisionRecord(
+                event_id=signal["event_id"],
+                hypothesis_id=spec.id,
+                evaluated_at=opened,
                 side=trade["side"],
-                entry_price=float(trade["entry_price"]),
                 entry_at=opened,
-                path=path,
-                exit_price=last.value,
-                horizon="5m",
+                entry_price=float(trade["entry_price"]),
+                reasons=(signal.get("reason") or "",),
             )
-            if outcome.net_return is None:
+            series = [
+                row
+                for row in visible
+                if row.factor == price_factor(spec.asset)
+            ]
+            closed = paper_execution(decision, spec.asset, series, spec.exit, CostModel())
+            if closed is None or closed.net_return is None:
                 continue
-            store.update_paper_outcome(trade["id"], outcome.net_return)
+            store.update_paper_outcome(trade["id"], closed.net_return)
             store.insert_activity(
                 uuid.uuid4().hex,
                 trade["agent_id"],
                 "OUTCOME_UPDATED",
-                {"trade_id": trade["id"], "version_id": trade["version_id"], "net_return": outcome.net_return},
+                {
+                    "trade_id": trade["id"],
+                    "version_id": trade["version_id"],
+                    "net_return": closed.net_return,
+                    "exit_reason": closed.exit_reason,
+                    "exit_price": closed.exit_price,
+                },
                 now,
             )
             settled.append(trade["id"])
