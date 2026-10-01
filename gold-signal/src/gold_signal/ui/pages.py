@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from gold_signal.compiler import compile_idea, render_hypothesis
 from gold_signal.domain.models import TransitionError
 from gold_signal.hypothesis import parse_hypothesis
+from gold_signal.market_context import context_from_default_archive
 from gold_signal.archive import default_archive, factors_for
 from gold_signal.research import (
     EVIDENCE_VALID_MIN_TRADES,
@@ -55,7 +56,7 @@ def mount_ui(app: FastAPI) -> None:
         return TEMPLATES.TemplateResponse(
             request,
             "agents.html",
-            {"rows": rows, "pct": _pct, "feed": _feed_view(request)},
+            {"rows": rows, "pct": _pct, "feed": _feed_view(request), "context": context_from_default_archive()},
         )
 
     @app.get("/agents/new")

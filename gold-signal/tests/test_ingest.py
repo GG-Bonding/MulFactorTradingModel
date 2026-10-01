@@ -70,7 +70,10 @@ def test_archive_backtest_and_feed_loop_and_new_version_needs_backtest(tmp_path)
         assert store.list_signals(agent.id)[0]["version_id"] == version.id
 
         feed.push(IngestBatch(published + timedelta(minutes=6), _prints(published, 6), None))
-        _wait(lambda: store.list_paper_trades(agent.id)[0]["net_return"] is not None)
+        _wait(
+            lambda: bool(store.list_paper_trades(agent.id))
+            and store.list_paper_trades(agent.id)[0]["net_return"] is not None
+        )
     finally:
         loop.stop()
 
