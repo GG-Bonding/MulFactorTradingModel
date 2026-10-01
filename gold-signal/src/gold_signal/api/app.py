@@ -8,8 +8,9 @@ import time
 from datetime import datetime, timezone
 from dataclasses import replace
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 
 from gold_signal.compiler import compile_idea
@@ -305,9 +306,23 @@ def create_app(store: ProductStore, feed: object | None = None) -> FastAPI:
         result = AgentRuntime().tick(store, now=body.now, observations=observations, event=event)
         return {"signals": len(result["signals"]), "settled": result["settled"]}
 
-    from gold_signal.ui.pages import mount_ui
+    from gold_signal.ui.pages import TEMPLATES, mount_ui
 
     mount_ui(app)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, exc: StarletteHTTPException):
+        accepts_page = "text/html" in request.headers.get("accept", "")
+        if exc.status_code == 404 and accepts_page and not request.url.path.startswith("/api/"):
+            return TEMPLATES.TemplateResponse(
+                request,
+                "missing.html",
+                {"message": "页面不存在"},
+                status_code=404,
+            )
+        detail = exc.detail if isinstance(exc.detail, (str, dict, list)) else "Not Found"
+        return JSONResponse({"detail": detail}, status_code=exc.status_code)
+
     return app
 
 

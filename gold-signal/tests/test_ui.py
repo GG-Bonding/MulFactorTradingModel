@@ -88,6 +88,19 @@ def test_pages_walk_compile_backtest_paper_and_keep_v1(tmp_path):
     store.close()
 
 
+def test_a_browser_miss_shows_a_page_instead_of_json(tmp_path):
+    store = ProductStore(tmp_path / "miss-page.sqlite")
+    client = TestClient(create_app(store))
+    page = client.get("/。", headers={"accept": "text/html"})
+    assert page.status_code == 404
+    assert "页面不存在" in page.text
+    assert "回到首页" in page.text
+    api = client.get("/。")
+    assert api.status_code == 404
+    assert api.json()["detail"] == "Not Found"
+    store.close()
+
+
 def test_edited_threshold_is_the_rule_that_gets_created(tmp_path):
     store = ProductStore(tmp_path / "edit.sqlite")
     client = TestClient(create_app(store))
