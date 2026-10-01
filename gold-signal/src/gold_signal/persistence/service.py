@@ -172,6 +172,9 @@ def record_paper_trade(store: ProductStore, trade: dict, *, now: datetime | None
         "spec_sha256": trade["spec_sha256"],
         "status": trade.get("status") or "PAPER",
         "net_return": trade.get("net_return"),
+        "spread_cost": trade.get("spread_cost"),
+        "slippage_cost": trade.get("slippage_cost"),
+        "commission": trade.get("commission"),
         "created_at": _iso(stamp),
     }
     store.insert_paper_trade(row)

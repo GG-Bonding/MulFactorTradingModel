@@ -4,10 +4,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from gold_signal.domain.models import AgentStatus, TransitionError
+from gold_signal.execution import simulate_trade
+from gold_signal.hypothesis import parse_hypothesis
 from gold_signal.ingest import IngestBatch, IngestLoop, ScriptedFeed
 from gold_signal.observation import EventRecord, Observation
 from gold_signal.persistence.service import add_hypothesis_version, create_from_idea, deploy_paper, run_backtest
 from gold_signal.persistence.store import ProductStore
+from gold_signal.replay_clock import CostModel, DecisionRecord
+from gold_signal.runtime.agent_loop import AgentRuntime
 
 IDEA = "如果非农高于预期，而且黄金一分钟下跌，我做空黄金。"
 
@@ -35,6 +39,39 @@ def _wait(predicate, timeout: float = 2.0) -> None:
             return
         time.sleep(0.02)
     raise AssertionError("ingest loop did not finish")
+
+
+def test_paper_nfp_exit_uses_the_same_cost_as_the_backtest(tmp_path):
+    store = ProductStore(tmp_path / "cost.sqlite")
+    agent, _version = create_from_idea(store, IDEA)
+    run_backtest(store, agent.id)
+    deploy_paper(store, agent.id)
+    published = _utc(14, 30)
+    text = "美国8月非农远高于预期"
+    event = EventRecord("feed-nfp", "", published, published, published, text, text, "feed")
+    runtime = AgentRuntime()
+    runtime.tick(store, now=published + timedelta(seconds=30), observations=list(_prints(published, 0)), event=event)
+    runtime.tick(store, now=published + timedelta(minutes=1), observations=list(_prints(published, 1)), event=event)
+    runtime.tick(store, now=published + timedelta(minutes=6), observations=list(_prints(published, 6)), event=None)
+    trade = store.list_paper_trades(agent.id)[0]
+    assert trade["spread_cost"] == CostModel().spread_cost * 4
+    signal = store.list_signals(agent.id)[0]
+    opened = datetime.fromisoformat(signal["evaluated_at"])
+    decision = DecisionRecord(
+        event_id=signal["event_id"],
+        hypothesis_id=parse_hypothesis(store.get_version(agent.active_version_id).hypothesis_yaml).id,
+        evaluated_at=opened,
+        side=trade["side"],
+        entry_at=opened,
+        entry_price=float(trade["entry_price"]),
+    )
+    spec = parse_hypothesis(store.get_version(agent.active_version_id).hypothesis_yaml)
+    costs = CostModel(trade["spread_cost"], trade["slippage_cost"], trade["commission"] or 0)
+    historical = simulate_trade(decision, spec.asset, list(_prints(published, 6)), spec.exit, costs)
+    flat = simulate_trade(decision, spec.asset, list(_prints(published, 6)), spec.exit, CostModel())
+    assert historical is not None and flat is not None
+    assert trade["net_return"] == historical.net_return
+    assert trade["net_return"] != flat.net_return
 
 
 def test_archive_backtest_and_feed_loop_and_new_version_needs_backtest(tmp_path):

@@ -6,12 +6,12 @@ from datetime import datetime
 from gold_signal.agent import order_from_decision
 from gold_signal.domain.models import AgentStatus
 from gold_signal.execution import paper_execution
+from gold_signal.research import _fill_cost, price_factor
 from gold_signal.hypothesis import parse_hypothesis, trigger_matches
 from gold_signal.observation import EventRecord, Observation
 from gold_signal.persistence.service import record_paper_trade, record_signal
 from gold_signal.persistence.store import ProductStore
 from gold_signal.replay_clock import CostModel, DecisionRecord
-from gold_signal.research import price_factor
 from gold_signal.runtime.context import LiveEvaluationContext
 from gold_signal.runtime.engine import HypothesisEngine
 
@@ -80,6 +80,7 @@ class AgentRuntime:
                 now=now,
             )
             order = order_from_decision(decision, version.hypothesis_yaml)
+            costs = _fill_cost(spec, event, decision, observations, CostModel())
             record_paper_trade(
                 store,
                 {
@@ -90,6 +91,9 @@ class AgentRuntime:
                     "entry_price": order["entry"],
                     "spec_sha256": order["spec_sha256"],
                     "net_return": None,
+                    "spread_cost": costs.spread_cost,
+                    "slippage_cost": costs.slippage_cost,
+                    "commission": costs.commission,
                 },
                 now=now,
             )
@@ -122,7 +126,7 @@ class AgentRuntime:
                 for row in visible
                 if row.factor == price_factor(spec.asset)
             ]
-            closed = paper_execution(decision, spec.asset, series, spec.exit, CostModel())
+            closed = paper_execution(decision, spec.asset, series, spec.exit, _stored_costs(trade))
             if closed is None or closed.net_return is None:
                 continue
             store.update_paper_outcome(trade["id"], closed.net_return)
@@ -141,6 +145,16 @@ class AgentRuntime:
             )
             settled.append(trade["id"])
         return settled
+
+
+def _stored_costs(trade: dict) -> CostModel:
+    if trade.get("spread_cost") is None:
+        return CostModel()
+    return CostModel(
+        spread_cost=float(trade["spread_cost"]),
+        slippage_cost=float(trade.get("slippage_cost") or 0),
+        commission=float(trade.get("commission") or 0),
+    )
 
 
 def _signaled(store: ProductStore, agent_id: str, version_id: str, event_id: str) -> bool:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from gold_signal.domain.models import Agent, AgentStatus, AgentVersion, TransitionError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     spec_sha256 TEXT NOT NULL,
     status TEXT NOT NULL,
     net_return REAL,
+    spread_cost REAL,
+    slippage_cost REAL,
+    commission REAL,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS activities (
@@ -86,9 +89,15 @@ class ProductStore:
     def _migrate(self) -> None:
         self._conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")
         applied = {row[0] for row in self._conn.execute("SELECT version FROM schema_migrations")}
-        if SCHEMA_VERSION not in applied:
+        if 1 not in applied:
             self._conn.executescript(SCHEMA)
-            self._conn.execute("INSERT INTO schema_migrations (version) VALUES (?)", (SCHEMA_VERSION,))
+            self._conn.execute("INSERT INTO schema_migrations (version) VALUES (1)")
+        if 2 not in applied:
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(paper_trades)")}
+            for name in ("spread_cost", "slippage_cost", "commission"):
+                if name not in columns:
+                    self._conn.execute(f"ALTER TABLE paper_trades ADD COLUMN {name} REAL")
+            self._conn.execute("INSERT INTO schema_migrations (version) VALUES (2)")
 
     def ping(self) -> None:
         self._conn.execute("SELECT 1 FROM agents").fetchone()
@@ -214,8 +223,9 @@ class ProductStore:
         self._conn.execute(
             """
             INSERT INTO paper_trades (
-                id, agent_id, version_id, signal_id, side, entry_price, spec_sha256, status, net_return, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, agent_id, version_id, signal_id, side, entry_price, spec_sha256, status, net_return,
+                spread_cost, slippage_cost, commission, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 trade["id"],
@@ -227,6 +237,9 @@ class ProductStore:
                 trade["spec_sha256"],
                 trade["status"],
                 trade.get("net_return"),
+                trade.get("spread_cost"),
+                trade.get("slippage_cost"),
+                trade.get("commission"),
                 trade["created_at"],
             ),
         )
