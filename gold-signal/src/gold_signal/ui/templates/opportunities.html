@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Market Opportunities</h1>
+<p class="status">Data Feed {{ feed.label }}</p>
+<p>Last update {{ feed.updated }}</p>
+{% if feed.error %}<p class="error">{{ feed.error }}</p>{% endif %}
+<h2>Market context</h2>
+<p class="status">{{ context.timestamp }}</p>
+<table>
+  <tbody>
+    <tr><th>Gold</th><td>{{ context.gold_trend }}</td></tr>
+    <tr><th>Silver</th><td>{{ context.silver }}</td></tr>
+    <tr><th>Oil</th><td>{{ context.oil }}</td></tr>
+    <tr><th>Dollar</th><td>{{ context.usd }}</td></tr>
+    <tr><th>Real yield</th><td>{{ context.real_yield }}</td></tr>
+    <tr><th>Risk</th><td>{{ context.risk }}</td></tr>
+    <tr><th>Geopolitical</th><td>{{ context.geopolitical }}</td></tr>
+  </tbody>
+</table>
+<h2>Opportunities</h2>
+{% if not opportunities %}
+<p>还没有机会。先写下一个交易认知。</p>
+{% endif %}
+{% for item in opportunities %}
+<h2>{{ item.asset }}</h2>
+<p class="status">{{ item.status|replace("_", " ") }}</p>
+{% if item.note %}<p>{{ item.note }}</p>{% endif %}
+<p>{{ item.aligned_mechanisms }} independent mechanism{% if item.aligned_mechanisms != 1 %}s{% endif %}</p>
+{% if item.as_of %}<p>Current signal {{ item.as_of }}</p>{% endif %}
+<table>
+  <thead><tr><th>Mechanism</th><th>Side</th><th>Hypothesis</th><th>Evidence</th></tr></thead>
+  <tbody>
+  {% for row in item.mechanisms %}
+    {% for hyp in row.hypotheses %}
+    <tr>
+      <td>{{ row.mechanism }}</td>
+      <td>{{ row.side }}</td>
+      <td>{{ hyp.name }} {{ hyp.status }}</td>
+      <td>{{ hyp.evidence or "—" }}</td>
+    </tr>
+    {% endfor %}
+  {% endfor %}
+  </tbody>
+</table>
+{% endfor %}
+{% endblock %}

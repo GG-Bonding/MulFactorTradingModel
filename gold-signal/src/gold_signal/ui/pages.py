@@ -12,6 +12,7 @@ from gold_signal.compiler import compile_idea, render_hypothesis
 from gold_signal.domain.models import TransitionError
 from gold_signal.hypothesis import parse_hypothesis
 from gold_signal.market_context import context_from_default_archive
+from gold_signal.opportunity import opportunities_for_store
 from gold_signal.thesis import thesis_for_store
 from gold_signal.archive import default_archive, factors_for
 from gold_signal.research import (
@@ -36,8 +37,16 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 def mount_ui(app: FastAPI) -> None:
     @app.get("/")
-    def root() -> RedirectResponse:
-        return RedirectResponse("/agents", status_code=303)
+    def root(request: Request):
+        return TEMPLATES.TemplateResponse(
+            request,
+            "opportunities.html",
+            {
+                "feed": _feed_view(request),
+                "context": context_from_default_archive(),
+                "opportunities": opportunities_for_store(request.app.state.store),
+            },
+        )
 
     @app.get("/agents")
     def agents_page(request: Request):
