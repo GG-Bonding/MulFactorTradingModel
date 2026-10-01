@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from gold_signal.compiler import compile_idea
 from gold_signal.market_context import context_from_default_archive
+from gold_signal.thesis import thesis_for_store
 from gold_signal.hypothesis import parse_hypothesis
 from gold_signal.research import changed_confirmations, compare_reports
 from gold_signal.domain.models import TransitionError
@@ -71,6 +72,10 @@ def create_app(store: ProductStore, feed: object | None = None) -> FastAPI:
     @app.get("/api/market-context")
     def market_context() -> dict:
         return context_from_default_archive()
+
+    @app.get("/api/thesis")
+    def thesis() -> list[dict]:
+        return thesis_for_store(store)
 
     @app.get("/healthz")
     def healthz() -> dict:

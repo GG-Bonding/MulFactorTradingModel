@@ -17,6 +17,27 @@
     <tr><th>Geopolitical</th><td>{{ context.geopolitical }}</td></tr>
   </tbody>
 </table>
+<h2>Thesis</h2>
+{% if not thesis %}
+<p>还没有可汇总的假设。</p>
+{% endif %}
+{% for item in thesis %}
+<p class="status">{{ item.asset }} {{ item.bias }}</p>
+{% if item.as_of %}<p>Latest signal {{ item.as_of }}</p>{% endif %}
+<p>{{ item.aligned_mechanisms }} independent mechanism{% if item.aligned_mechanisms != 1 %}s{% endif %}</p>
+<table>
+  <thead><tr><th>Mechanism</th><th>Side</th><th>Hypotheses</th></tr></thead>
+  <tbody>
+  {% for row in item.mechanisms %}
+    <tr>
+      <td>{{ row.mechanism }}</td>
+      <td>{{ row.side }}</td>
+      <td>{% for hyp in row.hypotheses %}{{ hyp.name }} {{ hyp.status }}{% if not loop.last %}; {% endif %}{% endfor %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endfor %}
 {% if not rows %}
 <p>还没有 Agent。从一句话开始。</p>
 {% else %}
