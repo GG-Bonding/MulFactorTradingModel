@@ -10,10 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from gold_signal.compiler import compile_idea, render_hypothesis
 from gold_signal.domain.models import TransitionError
-from gold_signal.hypothesis import parse_hypothesis
-from gold_signal.market_context import context_from_default_archive
-from gold_signal.opportunity import opportunities_for_store
-from gold_signal.thesis import thesis_for_store
+from gold_signal.hypothesis import Condition, parse_hypothesis
 from gold_signal.archive import default_archive, factors_for
 from gold_signal.research import (
     EVIDENCE_VALID_MIN_TRADES,
@@ -26,6 +23,7 @@ from gold_signal.observation import EventRecord, Observation
 from gold_signal.persistence.service import (
     add_hypothesis_version,
     create_from_idea,
+    create_from_yaml,
     deploy_paper,
     pause_agent,
     run_backtest,
@@ -37,42 +35,13 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 def mount_ui(app: FastAPI) -> None:
     @app.get("/")
-    def root(request: Request):
-        return TEMPLATES.TemplateResponse(
-            request,
-            "opportunities.html",
-            {
-                "feed": _feed_view(request),
-                "context": context_from_default_archive(),
-                "opportunities": opportunities_for_store(request.app.state.store),
-            },
-        )
-
     @app.get("/agents")
     def agents_page(request: Request):
         store = request.app.state.store
-        rows = []
-        for agent in store.list_agents():
-            signals = store.list_signals(agent.id)
-            trades = store.list_paper_trades(agent.id)
-            nets = [row["net_return"] for row in trades if row["net_return"] is not None]
-            rows.append(
-                {
-                    "agent": agent,
-                    "side": signals[-1]["side"] if signals else "FLAT",
-                    "paper": None if not nets else sum(nets) / len(nets),
-                }
-            )
         return TEMPLATES.TemplateResponse(
             request,
             "agents.html",
-            {
-                "rows": rows,
-                "pct": _pct,
-                "feed": _feed_view(request),
-                "context": context_from_default_archive(),
-                "thesis": thesis_for_store(store),
-            },
+            {"rows": _agent_rows(store), "feed": _feed_view(request)},
         )
 
     @app.get("/agents/new")
@@ -80,29 +49,54 @@ def mount_ui(app: FastAPI) -> None:
         return TEMPLATES.TemplateResponse(
             request,
             "new.html",
-            {"idea": "", "spec": None, "error": None},
+            {"idea": "", "spec": None, "editing": False, "error": None},
         )
 
     @app.post("/agents/new")
-    def new_submit(request: Request, idea: str = Form(""), action: str = Form("preview")):
-        result = compile_idea(idea)
+    async def new_submit(request: Request):
+        form = await request.form()
+        idea = str(form.get("idea") or "")
+        action = str(form.get("action") or "compile")
+        if action == "preview":
+            action = "compile"
+        factors = [str(item) for item in form.getlist("factor")]
+        operators = [str(item) for item in form.getlist("operator")]
+        values = [str(item) for item in form.getlist("value")]
+        edited = _edited_spec(idea, factors, operators, values) if factors else None
         if action == "create":
+            if edited is not None:
+                yaml, error = edited
+                if error:
+                    return TEMPLATES.TemplateResponse(
+                        request, "new.html", {"idea": idea, "spec": None, "editing": False, "error": error}, status_code=400
+                    )
+                agent, _version = create_from_yaml(request.app.state.store, idea, yaml)
+                return RedirectResponse(f"/agents/{agent.id}", status_code=303)
+            result = compile_idea(idea)
             if not result.ok or result.spec is None:
                 return TEMPLATES.TemplateResponse(
                     request,
                     "new.html",
-                    {"idea": idea, "spec": None, "error": result.errors[0] if result.errors else "无法编译"},
+                    {"idea": idea, "spec": None, "editing": False, "error": result.errors[0] if result.errors else "无法编译"},
                     status_code=400,
                 )
             agent, _version = create_from_idea(request.app.state.store, idea)
             return RedirectResponse(f"/agents/{agent.id}", status_code=303)
+        result = compile_idea(idea)
         spec = None if not result.ok or result.spec is None else _spec_view(result.spec)
+        if edited is not None and action == "edit":
+            yaml, error = edited
+            spec = None if error else _spec_view(parse_hypothesis(yaml))
+            if error:
+                return TEMPLATES.TemplateResponse(
+                    request, "new.html", {"idea": idea, "spec": spec, "editing": True, "error": error}, status_code=400
+                )
         error = None if spec else (result.errors[0] if result.errors else "无法编译")
         status = 200 if spec else 400
         return TEMPLATES.TemplateResponse(
             request,
             "new.html",
-            {"idea": idea, "spec": spec, "error": error},
+            {"idea": idea, "spec": spec, "editing": action == "edit" and spec is not None, "error": error},
             status_code=status,
         )
 
@@ -190,6 +184,21 @@ def mount_ui(app: FastAPI) -> None:
         AgentRuntime().tick(store, now=now, observations=observations, event=event)
         return RedirectResponse(f"/agents/{agent_id}", status_code=303)
 
+    @app.get("/agents/{agent_id}/backtest")
+    def backtest_latest(request: Request, agent_id: str):
+        store = request.app.state.store
+        agent = store.get_agent(agent_id)
+        if agent is None:
+            return TEMPLATES.TemplateResponse(request, "missing.html", {"message": "Agent not found"}, status_code=404)
+        runs = [
+            row
+            for row in store.list_backtests(agent_id)
+            if agent.active_version_id is None or row["version_id"] == agent.active_version_id
+        ]
+        if not runs:
+            return RedirectResponse(f"/agents/{agent_id}", status_code=303)
+        return RedirectResponse(f"/agents/{agent_id}/backtests/{runs[-1]['id']}", status_code=303)
+
     @app.get("/agents/{agent_id}/backtests/{run_id}")
     def backtest_page(request: Request, agent_id: str, run_id: str):
         store = request.app.state.store
@@ -238,6 +247,11 @@ def _detail_context(store, agent, error: str | None, request: Request) -> dict:
     latest = runs[-1] if runs else None
     report = _view_report(latest["report"] if latest else None)
     signals = store.list_signals(agent.id)
+    trades = store.list_paper_trades(agent.id)
+    activities = store.list_activities(agent.id)
+    windows = _windows(report)
+    oos = next((window for window in windows if window.get("name") == "oos"), None)
+    paper_nets = [row["net_return"] for row in trades if row["net_return"] is not None]
     return {
         "agent": agent,
         "version": version,
@@ -245,11 +259,16 @@ def _detail_context(store, agent, error: str | None, request: Request) -> dict:
         "spec": None if spec is None else _spec_view(spec),
         "latest": latest,
         "report": report,
-        "windows": _windows(report),
+        "windows": windows,
+        "oos": oos,
         "signals": list(reversed(signals))[:8],
-        "trades": list(reversed(store.list_paper_trades(agent.id)))[:8],
-        "current_side": signals[-1]["side"] if signals else "FLAT",
+        "trades": list(reversed(trades))[:8],
+        "paper_count": len(trades),
+        "paper_avg": None if not paper_nets else sum(paper_nets) / len(paper_nets),
+        "current_side": signals[-1]["side"] if signals else "—",
         "current_reason": signals[-1]["reason"] if signals else "",
+        "current_at": _minute(signals[-1]["evaluated_at"] if signals else None),
+        "monitor": _monitor(activities, signals, trades),
         "error": error,
         "pct": _pct,
         "published_at": "2026-03-24T14:30:00+00:00",
@@ -259,6 +278,96 @@ def _detail_context(store, agent, error: str | None, request: Request) -> dict:
         "feed": _feed_view(request),
         "comparison": _version_comparison(store, agent),
     }
+
+
+def _agent_rows(store) -> list[dict]:
+    rows = []
+    for agent in store.list_agents():
+        signals = store.list_signals(agent.id)
+        trades = store.list_paper_trades(agent.id)
+        runs = [
+            row
+            for row in store.list_backtests(agent.id)
+            if agent.active_version_id is None or row["version_id"] == agent.active_version_id
+        ]
+        report = _view_report(runs[-1]["report"]) if runs else None
+        last = signals[-1] if signals else None
+        rows.append(
+            {
+                "agent": agent,
+                "side": None if last is None else last["side"],
+                "last_signal": _minute(None if last is None else last.get("evaluated_at")),
+                "historical_trades": None if report is None else report.get("trades"),
+                "paper_trades": len(trades),
+            }
+        )
+    return rows
+
+
+def _edited_spec(idea: str, factors: list[str], operators: list[str], values: list[str]) -> tuple[str, str | None]:
+    result = compile_idea(idea)
+    if not result.ok or result.spec is None:
+        return "", result.errors[0] if result.errors else "无法编译"
+    if not (len(factors) == len(operators) == len(values)) or not factors:
+        return "", "每条规则都要有因子、比较和数值"
+    confirmations: list[Condition] = []
+    for factor, operator, raw in zip(factors, operators, values):
+        text = raw.strip()
+        try:
+            number = None if text == "" else float(text)
+        except ValueError:
+            return "", f"数值无法读取: {raw}"
+        confirmations.append(Condition(factor.strip(), operator.strip(), number))
+    spec = replace(result.spec, confirmations=tuple(confirmations))
+    try:
+        yaml = render_hypothesis(spec)
+        parse_hypothesis(yaml)
+    except ValueError as exc:
+        return "", str(exc)
+    return yaml, None
+
+
+def _monitor(activities: list[dict], signals: list[dict], trades: list[dict]) -> dict | None:
+    outcome = next((row for row in reversed(activities) if row["kind"] == "OUTCOME_UPDATED"), None)
+    matched = next((row for row in reversed(activities) if row["kind"] == "EVENT_MATCHED"), None)
+    signal = signals[-1] if signals else None
+    trade = None
+    if signal is not None:
+        trade = next((row for row in reversed(trades) if row.get("signal_id") == signal["id"]), None)
+    if trade is not None and trade.get("net_return") is not None:
+        return {
+            "status": "CLOSED",
+            "position": "CLOSED",
+            "signal": signal,
+            "trade": trade,
+            "exit_reason": None if outcome is None else outcome["detail"].get("exit_reason"),
+            "exit_price": None if outcome is None else outcome["detail"].get("exit_price"),
+        }
+    if trade is not None:
+        return {
+            "status": "SIGNAL",
+            "position": "OPEN",
+            "signal": signal,
+            "trade": trade,
+            "exit_reason": None,
+            "exit_price": None,
+        }
+    if matched is not None:
+        return {
+            "status": "WAITING_CONFIRMATION",
+            "position": None,
+            "signal": None,
+            "trade": None,
+            "exit_reason": None,
+            "exit_price": None,
+        }
+    return None
+
+
+def _minute(value: str | None) -> str:
+    if not value:
+        return "—"
+    return str(value).replace("T", " ")[:16]
 
 
 def _trace_groups(report: dict | None) -> list[dict]:
@@ -344,15 +453,35 @@ def _version_comparison(store, agent) -> dict | None:
 
 
 def _spec_view(spec) -> dict:
+    hold = int(spec.exit.max_hold.total_seconds() // 60)
     return {
         "trigger": spec.trigger or "—",
         "entry": spec.entry,
         "asset": spec.asset,
         "horizons": list(spec.horizons),
         "confirmations": [
-            {"factor": item.factor, "operator": item.operator, "value": item.value} for item in spec.confirmations
+            {
+                "factor": item.factor,
+                "operator": item.operator,
+                "value": item.value,
+                "shown": _shown(item.value),
+            }
+            for item in spec.confirmations
         ],
+        "exit": {
+            "max_hold": f"{hold}m",
+            "take_profit": spec.exit.take_profit,
+            "stop_loss": spec.exit.stop_loss,
+        },
     }
+
+
+def _shown(value: float | None) -> str:
+    if value is None:
+        return "—"
+    if abs(value) <= 1:
+        return f"{value:.2%}"
+    return f"{value:g}"
 
 
 def _view_report(report: dict | None) -> dict | None:

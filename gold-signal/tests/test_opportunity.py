@@ -84,9 +84,9 @@ def test_home_shows_a_setup_and_leaves_missing_evidence_blank(tmp_path):
     assert hypothesis["evidence"] == "INSUFFICIENT"
     page = client.get("/")
     assert page.status_code == 200
-    assert "Market Opportunities" in page.text
-    assert "SHORT SETUP" in page.text
-    assert "INSUFFICIENT" in page.text
+    assert "Trading Agents" in page.text
+    assert "SHORT" in page.text
+    assert "2026-09-04 12:31" in page.text
 
 
 def test_setups_sort_ahead_of_conflicts():

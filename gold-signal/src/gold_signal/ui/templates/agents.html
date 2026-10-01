@@ -1,58 +1,26 @@
 {% extends "base.html" %}
 {% block body %}
-<h1>Trading Agents</h1>
+<div class="row">
+  <h1>Trading Agents</h1>
+  <a href="/agents/new"><button type="button">+ New Agent</button></a>
+</div>
 <p class="status">Data Feed {{ feed.label }}</p>
 <p>Last update {{ feed.updated }}</p>
 {% if feed.error %}<p class="error">{{ feed.error }}</p>{% endif %}
-<h2>Market context</h2>
-<p class="status">{{ context.timestamp }}</p>
-<table>
-  <tbody>
-    <tr><th>Gold</th><td>{{ context.gold_trend }}</td></tr>
-    <tr><th>Silver</th><td>{{ context.silver }}</td></tr>
-    <tr><th>Oil</th><td>{{ context.oil }}</td></tr>
-    <tr><th>Dollar</th><td>{{ context.usd }}</td></tr>
-    <tr><th>Real yield</th><td>{{ context.real_yield }}</td></tr>
-    <tr><th>Risk</th><td>{{ context.risk }}</td></tr>
-    <tr><th>Geopolitical</th><td>{{ context.geopolitical }}</td></tr>
-  </tbody>
-</table>
-<h2>Thesis</h2>
-{% if not thesis %}
-<p>还没有可汇总的假设。</p>
-{% endif %}
-{% for item in thesis %}
-<p class="status">{{ item.asset }} {{ item.bias }}</p>
-{% if item.as_of %}<p>Latest signal {{ item.as_of }}</p>{% endif %}
-<p>{{ item.aligned_mechanisms }} independent mechanism{% if item.aligned_mechanisms != 1 %}s{% endif %}</p>
-<table>
-  <thead><tr><th>Mechanism</th><th>Side</th><th>Hypotheses</th></tr></thead>
-  <tbody>
-  {% for row in item.mechanisms %}
-    <tr>
-      <td>{{ row.mechanism }}</td>
-      <td>{{ row.side }}</td>
-      <td>{% for hyp in row.hypotheses %}{{ hyp.name }} {{ hyp.status }}{% if not loop.last %}; {% endif %}{% endfor %}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% endfor %}
 {% if not rows %}
 <p>还没有 Agent。从一句话开始。</p>
-{% else %}
-<table>
-  <thead><tr><th>Agent</th><th>Status</th><th>Side</th><th>Paper</th></tr></thead>
-  <tbody>
-  {% for row in rows %}
-    <tr>
-      <td><a href="/agents/{{ row.agent.id }}">{{ row.agent.name }}</a></td>
-      <td class="status">{{ row.agent.status.value }}</td>
-      <td>{{ row.side }}</td>
-      <td>{{ pct(row.paper) }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
 {% endif %}
+{% for row in rows %}
+<article class="card">
+  <div class="row">
+    <h2 style="margin:0">{{ row.agent.name }}</h2>
+    <p class="status">{{ row.agent.status.value }}</p>
+  </div>
+  <p>Current: {{ row.side or "—" }}</p>
+  <p>Last signal: {{ row.last_signal }}</p>
+  <p>Historical trades: {{ row.historical_trades if row.historical_trades is not none else "—" }}</p>
+  <p>Paper trades: {{ row.paper_trades }}</p>
+  <p><a href="/agents/{{ row.agent.id }}">Open</a></p>
+</article>
+{% endfor %}
 {% endblock %}

@@ -22,9 +22,14 @@ def create_from_idea(store: ProductStore, idea: str, *, now: datetime | None = N
     result = compile_idea(idea)
     if not result.ok or result.spec is None:
         raise ValueError(result.errors[0] if result.errors else "无法编译")
+    return create_from_yaml(store, idea, result.yaml, now=now)
+
+
+def create_from_yaml(store: ProductStore, idea: str, yaml: str, *, now: datetime | None = None) -> tuple[Agent, AgentVersion]:
+    spec = parse_hypothesis(yaml)
     stamp = now or _now()
-    agent = create_agent(uuid.uuid4().hex, result.spec.name, idea.strip(), stamp)
-    version = add_version(agent.id, [], result.yaml, stamp)
+    agent = create_agent(uuid.uuid4().hex, spec.name, idea.strip(), stamp)
+    version = add_version(agent.id, [], yaml, stamp)
     agent = activate(agent, version, at=stamp)
     store.save_agent(agent)
     store.save_version(version)

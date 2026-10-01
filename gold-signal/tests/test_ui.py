@@ -11,10 +11,17 @@ def test_pages_walk_compile_backtest_paper_and_keep_v1(tmp_path):
     store = ProductStore(tmp_path / "ui.sqlite")
     client = TestClient(create_app(store))
     assert client.get("/agents").status_code == 200
-    preview = client.post("/agents/new", data={"idea": SHORT, "action": "preview"})
+    preview = client.post("/agents/new", data={"idea": SHORT, "action": "compile"})
     assert preview.status_code == 200
     assert "NFP_ABOVE_EXPECTATION" in preview.text
     assert "XAUUSD.reaction_1bar" in preview.text
+    assert "Compile" in preview.text
+    assert "0.08%" in preview.text
+    assert "Max hold: 5m" in preview.text
+    edited = client.post("/agents/new", data={"idea": SHORT, "action": "edit"})
+    assert edited.status_code == 200
+    assert "Factor" in edited.text
+    assert 'name="value"' in edited.text
     refused = client.post("/agents/new", data={"idea": "今天天气不错", "action": "create"})
     assert refused.status_code == 400
     created = client.post("/agents/new", data={"idea": SHORT, "action": "create"}, follow_redirects=False)
@@ -78,6 +85,26 @@ def test_pages_walk_compile_backtest_paper_and_keep_v1(tmp_path):
     assert activity.status_code == 200
     for kind in ("AGENT_CREATED", "BACKTEST_FINISHED", "DEPLOYED", "SIGNAL_CREATED", "OUTCOME_UPDATED"):
         assert kind in activity.text
+    store.close()
+
+
+def test_edited_threshold_is_the_rule_that_gets_created(tmp_path):
+    store = ProductStore(tmp_path / "edit.sqlite")
+    client = TestClient(create_app(store))
+    created = client.post(
+        "/agents/new",
+        data={
+            "idea": SHORT,
+            "action": "create",
+            "factor": "XAUUSD.reaction_1bar",
+            "operator": "<",
+            "value": "0.0012",
+        },
+        follow_redirects=True,
+    )
+    assert created.status_code == 200
+    assert "0.12%" in created.text
+    assert "v1" in created.text
     store.close()
 
 

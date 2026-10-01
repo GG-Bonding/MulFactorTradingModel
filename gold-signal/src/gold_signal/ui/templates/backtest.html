@@ -23,6 +23,7 @@
     <tr><th>Profit factor</th><td>{{ report.net.profit_factor if report.net.profit_factor is not none else "—" }}</td></tr>
     <tr><th>MFE</th><td>{{ pct(report.net.avg_mfe) }}</td></tr>
     <tr><th>MAE</th><td>{{ pct(report.net.avg_mae) }}</td></tr>
+    <tr><th>End equity</th><td>{% if report.portfolio %}{{ report.portfolio.end_equity }}{% else %}—{% endif %}</td></tr>
   </tbody>
 </table>
 {% endif %}
@@ -53,12 +54,21 @@
   </tbody>
 </table>
 {% endif %}
+<h2>Trade / Event Explorer</h2>
 {% for group in trace_groups %}
 {% if group.rows %}
 <h2>{{ group.name }}</h2>
 {% for trace in group.rows %}
+<article class="card">
 <p><strong>{{ trace.published_at }}</strong> {{ trace.title }}</p>
-<p>Decision {{ trace.side }}{% if trace.entry_price is not none %} · Entry {{ trace.entry_price }}{% endif %}{% if trace.exit_reason %} · Exit {{ trace.exit_reason }} {{ trace.exit_price }}{% endif %}{% if trace.skipped_open_position %} · Skipped, previous position still open{% endif %}</p>
+<p>Decision {{ trace.side }}</p>
+{% if trace.entry_price is not none %}<p>Entry {{ trace.entry_price }}</p>{% endif %}
+{% if trace.exit_reason %}
+<p>Exit {{ trace.exit_price }}</p>
+<p>Reason {{ trace.exit_reason }}</p>
+<p>Net {{ pct(trace.net_return) }}</p>
+{% endif %}
+{% if trace.skipped_open_position %}<p>Skipped, previous position still open</p>{% endif %}
 {% if trace.reasons %}<p>{{ trace.reasons | join(" · ") }}</p>{% endif %}
 {% if trace.reactions %}
 <table>
@@ -77,6 +87,7 @@
   </tbody>
 </table>
 {% endif %}
+</article>
 {% endfor %}
 {% endif %}
 {% endfor %}
